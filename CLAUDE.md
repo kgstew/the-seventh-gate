@@ -9,7 +9,11 @@ Control configuration for **The Seventh Gate** — six independent lighting gate
 patterns cycle in series; one ultrasonic sensor per gate triggers a "flashbulb" on that
 gate only. There is no cross-gate coordination.
 
-The repository is deliberately small because **WLED is the chassis**. Sequencing,
+The repo also covers a second, separate installation on a different control chassis — the
+**Stupa** (authored in Chromatik and driven by an Advatek pixel controller, *not* WLED).
+It shares nothing with the gate fleet but the WS2815 pixel type; see *The Stupa* below.
+
+The repository is deliberately small because **WLED is the chassis** for the gates. Sequencing,
 crossfades, power limiting, OTA, and the web UI are all configuration, not code. The
 repo therefore contains only:
 
@@ -19,6 +23,7 @@ repo therefore contains only:
 | `wled_presets.json` | Patterns, playlists, flashbulb chain — the installation's behaviour |
 | `wled_cfg.json` | Device config: LED bus, network, usermod settings. **Currently a bench export, not the fleet baseline** |
 | `.claude/epic/` | Ticket-per-file decision record; completed tickets move to `complete/` |
+| `stupa/` | The **Stupa** sculpture — Chromatik project (`.lxp`) + fixture (`.lxf`) for its Advatek controller; unrelated to the gate fleet (see *The Stupa*) |
 
 Read `.claude/epic/00-epic-summary.md` first — it holds the architecture decisions,
 hardware pinout, open questions, and the ticket dependency graph. Ticket files are the
@@ -117,6 +122,43 @@ current presets contain review fixes that **have not been uploaded to any board*
 - Operation is **night-only** with the 12V supply switched externally. Nothing may
   depend on NTP or time of day, and nothing may depend on a network being present —
   running with no reachable AP is the *normal* state.
+
+## The Stupa (Chromatik + Advatek)
+
+A **separate sculpture on a different control chassis** — authored in Chromatik (the LX
+engine) and streamed as **sACN / E1.31** to one **Advatek PixLite A4-S Mk3**. Not part of
+the six-gate WLED fleet and shares no code with it. In normal operation it plays
+**standalone from the controller's microSD** (Advatek SHOWTime); the computer and network
+are present only while programming.
+
+**Structure.** 34 ring arcs = 17 rings × 2 mirrored sides (A/B), ~2,638 WS2815 pixels
+total (~1,319 per side). The pixels are **12V, GRB, data-only** (no clock line).
+
+**Files.** `stupa/Stupa_Show_2026_8out.lxp` is the Chromatik project; its model is 34
+**embedded ArcFixtures** — the geometry lives in the `.lxp`, not in any `.lxf`.
+`stupa/StupaColumnsUpdated.lxf` is a separate *columns* fixture blueprint and is **not
+used** by the current arc-based show.
+
+**Controller (A4-S Mk3, "ASS 1").** Static IP **10.0.0.21 / 255.255.255.0** — it *must* be
+static; on AutoIP it self-assigns a `169.254.x.x` link-local that nothing can reach. Data
+source sACN, "Pixels can be split across universes" **OFF**, RGB(W) Order **GRB**.
+**Expanded Mode is ON**: it repurposes each output's clock pin as a second data line to
+give **8 data-only outputs** (only valid because WS2815 is clockless), capped at **510 px
+/ 3 universes per output**.
+
+**Addressing is a contract — model and controller must agree.** Eight outputs, each one
+contiguous block. Side A = outputs 1-4 (physical terminals 1 & 2), universes **1-9**; Side
+B = outputs 5-8 (terminals 3 & 4), universes **10-18**. Each side splits rings **1-3 / 4-6
+/ 7-9 / 10-17** = **312 / 329 / 299 / 379** px. Two things are baked into the model so the
+controller needs no compensation: color order happens in exactly one place (**model sends
+RGB, controller swaps to GRB**), and the **serpentine wiring is baked into pixel order** by
+reversing every other ring (rings **2, 5, 8, 11, 13, 15, 17** per side) — so controller
+**Zig Zag stays at 1** (its minimum = off) and **Reversed off**.
+
+**Re-address, don't hand-patch.** The `.lxp` addressing and the controller table are a
+matched pair (contiguous, split-OFF, 170 px/universe). If ring counts or the physical
+output split change, regenerate the `.lxp` addressing rather than editing one side alone,
+or the pixel map drifts.
 
 ## Predecessor project
 
