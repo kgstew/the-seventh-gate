@@ -1,0 +1,8 @@
+{
+  "name": "hcsr04_flashbulb",
+  "version": "1.0.0",
+  "description": "HC-SR04 proximity trigger for the flashbulb effect (The Seventh Gate)",
+  "build": {
+    "libArchive": false
+  }
+}
