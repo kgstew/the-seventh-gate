@@ -1,0 +1,119 @@
+# 07 — Flashbulb Effect
+
+**Blocks on:** 05, 06
+**Blocks:** 09
+
+## Goal
+
+A sensor trigger fires a camera-flash effect on that gate — hard white flash, slow
+fade to black, gentle return to the running pattern — then the gate resumes its
+playlist.
+
+## The effect, as specified by the predecessor
+
+From `~/Code/reflecting-the-present/src/flashbulb_patterns.cpp`, a 4-phase state
+machine with these timings:
+
+| Phase | Duration | Behaviour |
+|---|---|---|
+| `FLASH` | 100ms | Full white, instant, no fade in |
+| `FADE_TO_BLACK` | 5000ms | Fade white → black |
+| `TRANSITION_BACK` | 2000ms | Blend black → the running pattern |
+| `INACTIVE` | — | Normal playlist operation |
+
+These timings are a starting point carried from a working installation, not gospel.
+Expect to tune them on site (ticket 10).
+
+## How this maps onto WLED — no state machine needed
+
+The four phases collapse into preset applications with different transition times.
+WLED's transition engine does the interpolation.
+
+1. **Flash** — solid-white preset, transition **0ms** (instant)
+2. **Hold** — 100ms
+3. **Fade** — solid-black preset, transition **5000ms**
+4. **Return** — main playlist, transition **2000ms**
+
+Ticket 06 selected the HC-SR04, so the trigger comes from **the usermod** — that is
+settled. But the usermod does not need to hand-time the phases itself.
+
+**Preferred: usermod triggers a one-shot WLED playlist.** A playlist is an ordered list
+of presets with per-entry durations and transitions, a repeat count, and an **end
+preset**. So the flashbulb becomes a playlist of [white, black], repeat once, end
+preset = the main pattern playlist. The usermod's only jobs are then **threshold
+detection and the 15s cooldown** — it fires one preset and WLED owns all the timing.
+Far less code than three timed `applyPreset()` calls tracked across frames.
+
+Worth verifying on hardware: that a playlist can name another playlist's preset slot as
+its end preset. Playlists are stored as presets in WLED's model so this should hold,
+but confirm before designing around it.
+
+**Fallback: usermod drives the phases directly** with timestamped, non-blocking
+`applyPreset()` calls, if the playlist-as-flashbulb approach does not behave.
+
+Either way: no phase enum, no per-frame state machine, no saved-colour buffer.
+
+Note what this deletes relative to the predecessor: the `FlashBulbManager` 5-slot
+pool (which leaked slots and jammed permanently after 5 triggers), and the
+`saved_colors[22*122]` buffer — ~40KB that was written every trigger and never read.
+Neither has an analogue here.
+
+## Two design tensions to resolve deliberately
+
+**1. ABL will mute the flash.** The flash is full white across all 234 pixels — the
+installation's peak power draw by a wide margin. If ABL is clamping, your loudest
+moment is quietly dimmed. Resolve via ticket 02: size the PSU for genuine full white
+and set ABL as a backstop above expected draw, not as an active limiter. Verify the
+flash is actually reaching full brightness.
+
+**2. Playlist resume vs restart.** When the flash sequence ends and hands back to
+the playlist, does the playlist resume mid-cycle or restart from preset 1?
+**Ticket 05 is complete — read the answer from `complete/05-pattern-sequencing.md`
+before implementing the return logic.** If it restarts, a gate on a busy path could get stuck
+perpetually replaying pattern 1 and never reach patterns 2 and 3 — which would be a
+real artistic failure, not just a technical one. If that is the behaviour, the
+usermod needs to capture and restore playlist position explicitly.
+
+## Tasks
+
+- [ ] Create the flashbulb presets (slots reserved in ticket 05):
+  - [ ] Solid white, transition 0ms
+  - [ ] Solid black, transition 5000ms
+- [ ] Build the one-shot flashbulb playlist; have the usermod trigger it
+- [ ] Keep the usermod's responsibility minimal — threshold plus cooldown. **Do not use
+      `delay()`** anywhere; it stalls the frame loop and the web server. Note the
+      HC-SR04 read itself is a blocking-call risk — see `06`.
+- [ ] Handle the playlist return per the resume/restart finding from ticket 05
+- [ ] Make the three timings (flash hold, fade duration, return duration)
+      configurable via `addToConfig()` so they are tunable on site
+- [ ] Verify the flash reaches genuine full brightness and is not ABL-clamped
+- [ ] Verify a trigger **during** a pattern crossfade behaves sanely rather than
+      producing a visual glitch
+- [ ] Verify a second trigger arriving mid-sequence is correctly suppressed by the
+      cooldown and cannot corrupt the state
+- [ ] Confirm the gate returns to normal operation every time — a flashbulb that
+      occasionally strands a gate at black is the worst failure mode here, since it
+      is silent and the gate simply goes dark
+- [ ] Soak test: trigger repeatedly over an extended period and confirm no drift,
+      no stuck state, no memory growth
+
+## Acceptance criteria
+
+- Trigger produces the full 4-phase sequence with correct timings
+- Flash is at genuine full brightness, not ABL-clamped
+- Gate returns to its playlist afterward, **every time**, verified over a soak test
+  of many triggers
+- Playlist position behaviour is correct and documented (patterns 2 and 3 are still
+  reachable on a frequently-triggered gate)
+- Triggers during crossfades and during an in-progress sequence are handled without
+  glitch or state corruption
+- The three timings are configurable from the WLED UI
+- Effect fires on **that gate only** — no cross-gate leakage
+
+## Open questions
+
+- Are the predecessor's 100ms / 5000ms / 2000ms timings still artistically right for
+  this piece, or is this a fresh design? (Owner: stakeholder, ticket 10)
+- Should the flash colour be pure white, or slightly warmed to match the palette?
+- Should the fade go fully to black, or to a dim floor? Full black on a gate in a
+  dark space is a strong, potentially startling effect.
