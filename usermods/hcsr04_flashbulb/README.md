@@ -148,17 +148,46 @@ tunable from a phone with no reflash.
 |---|---|---|
 | `enabled` | `true` | |
 | `trigPin` / `echoPin` | 32 / 33 | **Reboot required to change** |
-| `thresholdCm` | 150 | Fire when closer than this. Calibrate per gate. |
+| `deltaCm` | 40 | **How much closer than the background counts as a passage.** Calibrate per gate. |
 | `minValidCm` | 5 | Below this, discard as a bad reading |
-| `maxValidCm` | 400 | Above this, treat as no target. Also sets the echo timeout. |
-| `consecutiveHits` | 2 | Readings under threshold before firing |
-| `cooldownSec` | 15 | Suppression window after a trigger |
+| `maxValidCm` | 400 | Above this, nothing is out there. Also sets the echo timeout. |
+| `consecutiveHits` | 2 | Readings showing a target before firing |
+| `cooldownSec` | 60 | Suppression window. **Must exceed the whole flash sequence** (34.1s) |
 | `readIntervalMs` | 100 | **Vary per gate — see cross-talk** |
+| `baselineAdaptSec` | 8 | How fast the background estimate tracks a changing scene |
+| `stuckResetSec` | 60 | Adopt a parked object as background after this long |
 | `flashPresetId` | **101** | "Flashbulb Playlist" — matches `wled_presets.json` |
 
 `consecutiveHits` matters more than it looks. HC-SR04 readings are noisy, and a single
 spurious short reading should not fire a flash across a whole gate. Raise it if you see
 phantom triggers; lower it to 1 only if detection feels sluggish.
+
+`cooldownSec` is not just taste. The flash sequence runs 34.1s end to end; a cooldown
+shorter than that lets the sensor re-fire mid-fade, which visibly corrupts it.
+
+## How detection works — change, not distance
+
+The trigger is **"something got `deltaCm` closer than the running background"**, not
+"something is nearer than X centimetres".
+
+A gate's quiescent reading is whatever sits across its opening. That differs at every
+gate, and it drifts: the speed of sound moves ~0.6 m/s per °C, so a fixed threshold
+calibrated in the afternoon is wrong at 3am. Detecting a *change* calibrates itself, and
+passage is what the installation actually wants to detect.
+
+Three behaviours that follow, each of which exists for a reason:
+
+- **A no-echo reading counts as "far", it is not discarded.** Aimed across an open gate
+  the background *is* no-echo, and a passer-by is the first valid reading the sensor ever
+  returns. Throwing those away would leave nothing to detect a change against.
+- **A target that stops moving becomes the new background** after `stuckResetSec`. A bag
+  left in the beam would otherwise flash the gate every cooldown until someone moved it —
+  which would make change detection strictly worse than a fixed threshold for a piece
+  left unattended overnight.
+- **`deltaCm` is clamped to half the background.** If the background is nearer than
+  `deltaCm`, the trip point would be at or below zero and the gate could never fire at
+  any distance — dead, silently. The info panel appends `(delta clamped)` when this is in
+  effect. At real gate geometry the clamp never engages.
 
 ## Cross-talk between gates — set `readIntervalMs` per gate
 
@@ -173,22 +202,50 @@ rather than locking together. Primes work well:
 | `readIntervalMs` | 97 | 101 | 103 | 107 | 109 | 113 |
 
 This is one of the three genuinely per-gate values in `cfg.json`, alongside hostname and
-`thresholdCm`.
+`deltaCm`.
 
 ## Field tuning
 
-1. Open the gate's web UI → **Info**. Two live readouts: **Gate distance** and
-   **Flashbulb** (armed / cooldown / disabled).
-2. Stand where a visitor would. Read the distance. Set `thresholdCm` comfortably inside
-   it — generous margin, not the edge.
-3. **Test with people in winter outerwear.** Clothing absorbs ultrasound and this piece
-   runs at night in the cold. A threshold calibrated against a t-shirt will miss people
+The info panel carries four live readouts, and they are load-bearing — relative detection
+means a bare distance no longer tells you whether the gate is about to fire:
+
+| Readout | Meaning |
+|---|---|
+| **Gate distance** | Last valid reading, or `no echo` |
+| **Gate background** | The self-tracking quiescent estimate |
+| **Gate trips under** | The distance that will actually fire. **This is the number to tune against.** |
+| **Flashbulb** | `armed` / `Ns cooldown` / `disabled` |
+
+1. Aim the sensor across the opening and let it sit for ~10s so the background settles.
+2. Read **Gate trips under**. If it says **0**, the gate cannot fire — the background is
+   nearer than `deltaCm`. Re-aim, or lower `deltaCm`.
+3. Stand where a visitor would and confirm the reading drops below the trip distance.
+   Leave generous margin, not the edge.
+4. **Test with people in winter outerwear.** Clothing absorbs ultrasound and this piece
+   runs at night in the cold. A `deltaCm` calibrated against a t-shirt will miss people
    in coats. This is the biggest reliability risk in the sensor choice.
-4. Leave margin for temperature drift — the speed of sound moves ~0.6 m/s per °C, so
-   readings shift across seasons.
 5. Watch for phantom triggers with all six gates live; adjust intervals or
    `consecutiveHits`.
 6. Re-export `cfg.json` and commit it.
+
+Temperature drift needs less margin than it used to: both the reading and the background
+shift together, so relative detection cancels most of it.
+
+## Diagnosing the rendered output
+
+`/json/state` reports *target* values, not what is on the pixels mid-transition, which
+makes it useless for chasing visual artifacts. WLED's live-preview WebSocket is ground
+truth — it pushes the actual frame buffer every 40ms:
+
+```
+connect ws://<gate>/ws, send {"lv":true}
+binary frames: 'L', version byte, then RGB per LED
+```
+
+Two caveats learned the hard way: the buffer is **pre-global-brightness** (white reads
+255 regardless of `bri`), and the board cannot serve the WebSocket and a tight HTTP poll
+at the same time without dropping requests. This is how the double-flash was tracked to
+an uncommitted transition after colour and brightness theories both failed.
 
 ## Design notes
 
@@ -206,16 +263,23 @@ code. Everything downstream — streak, cooldown, config, info panel — is sens
 so the documented VL53L1X fallback replaces one function rather than the usermod. If
 cross-talk or coat absorption proves fatal in the field, that swap stays cheap.
 
-## Not yet verified on hardware
+## Hardware verification
 
-Outstanding:
+Verified on board 1 (MAC `c0:cd:d6:3b:af:b0`), 2026-08-06:
 
 - [x] Compiles against the chosen WLED baseline — v16.0.1, links and registers, see above
-- [ ] Constant-5V pin identified with a meter; sensor powers up
-- [ ] Distance readings sane and stable in the info panel
-- [ ] **Frame rate unaffected** — no stutter while reads are running
-- [ ] Trigger fires the flashbulb preset; gate returns to its playlist
-- [ ] Cooldown suppresses retriggering
+- [x] Constant-5V pin identified; sensor powers up
+- [x] Distance readings sane and stable in the info panel
+- [x] **Frame rate unaffected** — held 43–45 fps with the sensor pinging every 97ms,
+      identical to idle. The non-blocking read design does what it claims.
+- [x] Trigger fires the flashbulb preset; gate returns to its playlist
+- [x] Cooldown suppresses retriggering
+- [x] Passage detection confirmed by hand through the beam
+
+Still outstanding, all needing time or the full fleet:
+
 - [ ] No false triggers over a multi-hour idle test
 - [ ] Detection reliable with real bodies in outerwear
-- [ ] Cross-talk tested with all six gates running
+- [ ] Cross-talk tested with all six gates running (ticket 09)
+- [ ] Background stability overnight — confirm temperature drift is absorbed by the
+      baseline rather than accumulating into phantom triggers

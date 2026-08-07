@@ -1,5 +1,40 @@
 # 07 — Flashbulb Effect
 
+## STATUS: working on hardware, with a subtle bug found and fixed
+
+Verified on board 1 on 2026-08-06. Current shape, measured off WLED's live frame buffer
+rather than inferred: snap to white → **15s** fade to black → 2s settled black → **15s**
+fade up into the pattern → 2s settle → hand back. Total **34.1s**; `cooldownSec` is 60 so
+the sensor cannot re-fire mid-sequence.
+
+### The phantom second flash — root cause
+
+A second, full-brightness white flash appeared just before the gate returned to its
+pattern. Three plausible explanations were tested and **all three were wrong**: dead white
+`col[0]` on the incoming preset, the 255→128 brightness step at the hand-back, and the
+preset-vs-playlist transition precedence.
+
+The actual cause: **preset `101` had `transition: [0,50]` against `dur: [1,50]`** — the 5s
+fade to black ran exactly as long as its 5s entry. An entry whose fade is still running
+when the entry ends never *commits*, so the next crossfade blends from the last committed
+state, which was preset `10`'s **white**. The strip rendered black correctly, then blended
+from white anyway.
+
+**Rule, now recorded in CLAUDE.md: in a WLED playlist every entry's `transition` must be
+strictly shorter than its `dur`.** Every entry now carries 2s of settle.
+
+Found by capturing WLED's live-preview WebSocket frame buffer, which is ground truth for
+what is on the pixels; `/json/state` reports target values and shows nothing of this.
+
+### Also changed
+
+- **New preset `12` Flashbulb Recover**, pixel-identical to `1` Rainbow. The flash fades
+  *up* into it from black, so the hand-back to `100` is visually a no-op. Keep the two in
+  sync or a step returns.
+- **All presets at `bri: 255`**, plus `def.bri`. One brightness everywhere means no preset
+  boundary can produce a step.
+
+
 **Blocks on:** 05, 06
 **Blocks:** 09
 

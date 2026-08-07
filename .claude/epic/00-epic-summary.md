@@ -127,6 +127,7 @@ Completed tickets move to `complete/`.
 | 09 | `09-fleet-commissioning.md` — replicate to 6 gates | 05 ✅, 07, 08, 11 | Blocked |
 | 10 | `10-field-tuning-acceptance.md` — on-site tuning and sign-off | 09 | Blocked |
 | 11 | `11-quinled-migration.md` — bench ESP32 → QuinLED Dig-Next-2 | — | **▶ IN PROGRESS** — software done, board 1 running |
+| 12 | `12-echo-level-conversion.md` — BSS138 shifter chosen over the resistor divider | 06 | **▶ READY** — part on hand |
 
 Critical path: ~~01~~ → ~~03~~ → ~~05~~ → **11 + 06 together** → 07 → 09 → 10.
 
@@ -159,18 +160,22 @@ and coat-absorption failure modes tracked in 09 and 10.
   primary concern, not an edge case. See `05`, `09`.
 - Ambient light is not a design factor.
 
-### Timing interaction to watch — pattern 2 may rarely be seen
+### Timing interaction — CORRECTED on hardware
 
-With the current config, a triggered gate runs: flash ~5.1s → main playlist **restarts**
-at preset 1 (Rainbow, 10s) → preset 2 (Twinkleup, 10s). The sensor cooldown is 15s.
+This section previously claimed preset `101` **restarts** the main playlist at Rainbow
+rather than resuming it. **That is wrong**, verified on board 1.
 
-So the cooldown expires at t=15s while Rainbow is still showing (it runs t≈5.1 to
-t≈15.1). Twinkleup only appears if **no one triggers the gate for a further ~10s**. On a
-gate with steady foot traffic, visitors may only ever see Rainbow and the flash.
+WLED has native nested-playlist resume (`playlist.cpp`: `loadPlaylist` saves
+`parentPlaylistIndex` when a playlist is loaded over a running one, and restores it on
+return). Interrupting during Twinkleup and measuring where it landed confirms `101`
+resumes `100` and advances to the *next* entry. The always-Rainbow behaviour originally
+observed was an artifact of a parked object re-triggering on a fixed beat, so the
+interrupt kept landing on the same entry — not a restart.
 
-Not a bug — the numbers simply interact badly. Levers: lengthen the cooldown, shorten the
-pattern durations, or have the usermod restore playlist position instead of restarting.
-Decide under real traffic in `10`, not from a spreadsheet.
+The Twinkleup-starvation risk is also largely dissolved by two later changes: detection is
+now *passage*-based, so triggers are discrete events rather than a metronome, and
+`cooldownSec` is **60** against a 34.1s flash sequence. Re-assess under real traffic in
+`10` rather than from a spreadsheet, but the original mechanism was misdiagnosed.
 
 ## Open questions
 
@@ -179,8 +184,10 @@ that owns resolution.
 
 1. **Detection geometry** — opening width, mounting position, and whether the flash
    fires on approach or on passage. → `06`
-2. **Controller-to-sensor distance**, measured at a real gate. Decides whether the
-   HC-SR04 needs a simple divider or a level-shifter module. → `06`
+2. **Controller-to-sensor distance**, measured at a real gate. No longer decides the
+   level-conversion method — `12` chose the BSS138 module, which is correct at either
+   length — but still sets cable length and the Trig rise time through the module's
+   pull-up. → `06`, `12`
 3. **Measured WS2815 draw** on the real strip and PSU. ABL is currently disabled
    (`maxpwr: 0`) and cannot be set without this. → `02`, `11`
 4. **Were ticket 02's measurements taken on real hardware**, or on the bench ESP32? If
