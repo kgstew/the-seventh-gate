@@ -105,9 +105,12 @@ current presets contain review fixes that **have not been uploaded to any board*
 
 ## Hardware facts that change code decisions
 
-- **Development is on a plain ESP32 dev board, not the QuinLED.** `wled_cfg.json` has
-  the LED bus on GPIO 16; the target is GPIO 2. Migration is ticket 11. Do not treat
-  bench-verified results as valid for the fleet.
+- **Migration to the QuinLED is done (ticket 11).** `wled_cfg.json` is now the QuinLED
+  fleet baseline — LED bus on GPIO 2, usermod block present, relay on GPIO 20 — verified
+  running on board 1 (ESP32-PICO-V3-02, MAC `c0:cd:d6:3b:af:b0`). The bench ESP32 config
+  is gone. Remaining hardware work is in `BRINGUP.md`.
+- **The firmware baseline tag is `v16.0.1`, not `v0.16.1`.** WLED renumbered after
+  `v0.15.5`; no `v0.16.x` tag exists. Docs saying "0.16.1" mean `v16.0.1`.
 - **GPIO 34/35 are never valid for Echo** — hardware debouncing destroys a
   width-encoded pulse, and they are input-only. Trig 32 / Echo 33 via QEXP.
 - **Every GPIO is 3.3V max; Echo outputs 5V** — level conversion is mandatory on both
@@ -117,8 +120,17 @@ current presets contain review fixes that **have not been uploaded to any board*
   sensor look dead.
 - **GPIO 0 is the boot strapping pin**; held low at power-on the board enters download
   mode. Gates cold-boot unattended ~365 times a year, so this is a nightly risk.
+- **The fused power outputs are relay-gated. `hw.relay.pin` must be `20`.** The QuinLED
+  does not pass 12V straight through to its output terminals — an onboard relay switches
+  each one, and GPIO 20 drives the one feeding the LED strip. At WLED's default of `-1`
+  the relay never closes and the gate is dark, while the board itself looks perfectly
+  healthy. Because WLED ties the relay to on/off state, **no preset may use `on: false`**
+  (that opens the relay and cuts strip power); use black at full brightness instead, as
+  preset 11 does. `def.on` must stay `true` for the nightly cold boot.
 - **GPIO 21/22 are relay control lines here**, not I²C. Never call a bare
-  `Wire.begin()` — always `Wire.begin(15, 14)`.
+  `Wire.begin()` — always `Wire.begin(15, 14)`. They gate the other two power outputs and
+  are undriven; WLED's built-in relay supports only one pin, so a second output would
+  require the `multi_relay` usermod and break the one-usermod fleet baseline.
 - Operation is **night-only** with the 12V supply switched externally. Nothing may
   depend on NTP or time of day, and nothing may depend on a network being present —
   running with no reachable AP is the *normal* state.
