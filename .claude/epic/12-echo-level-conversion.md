@@ -122,6 +122,96 @@ resistors anywhere, valid under ~1m — but no gate ships with it.
 - [ ] Only then batch the remaining five
 - [ ] Record the module in the BOM with the spare count
 
+## Real-world test scenarios — follow-up
+
+Everything verified so far was a hand waved at a bench sensor on a short lead. These are
+the scenarios that decide whether the gate actually works in position, and most of them
+cannot be run until the final harness (module, real cable length, real mounting) exists —
+which is why they live here rather than in `06`.
+
+Each needs a recorded result, not a vibe. Where a scenario belongs to another ticket's
+acceptance, it is marked.
+
+### A. Detection under real passage
+
+- [ ] **Walk-through at normal pace, 20 passes, count misses.** Target: zero.
+      The real risk is geometric, not electrical. `consecutiveHits: 2` at
+      `readIntervalMs: 97` means a target must sit in the beam for **≥ ~200ms**. At a
+      normal 1.5 m/s walk that is ~30cm of travel through a ~15° cone — comfortable at 2m
+      range, tight up close. If passes are missed, drop `consecutiveHits` to 1 before
+      touching anything else, and accept the higher phantom-trigger risk knowingly.
+- [ ] **Run/fast walk through the opening.** Someone hurrying is the worst case for the
+      dwell-time arithmetic above.
+- [ ] **A person stopping in the opening to look.** Should fire once, then be adopted as
+      background after `stuckResetSec` (60s) rather than flashing repeatedly. Confirm it
+      re-arms cleanly once they move on.
+- [ ] **Approach vs passage.** Ticket `06` never resolved whether the flash should fire on
+      approach or on passage. Decide it here against real bodies and real mounting, and
+      record the mounting position and aim that follow from it.
+
+### B. The clothing problem — highest-risk item
+
+- [ ] **Same 20 passes in heavy winter outerwear**, at the real ambient temperature.
+      Clothing absorbs ultrasound and this piece runs cold at night. A `deltaCm` proven
+      against a t-shirt is not evidence.
+- [ ] Compare returned distances: t-shirt vs coat, at the same standing position. Record
+      both. The delta between them is the real margin `deltaCm` has to live inside.
+- [ ] If coats are unreliable at the chosen geometry, this is the trigger for the
+      documented **VL53L1X swap** (`06`), not for endlessly retuning `deltaCm`.
+
+### C. Unattended stability
+
+- [ ] **Full-night idle soak with zero flashes.** No people, gate powered, sensor aimed as
+      installed. Any trigger is a false positive and must be explained, not averaged away.
+- [ ] **Background stability across the night.** Log `Gate background` hourly. The speed of
+      sound moves ~0.6 m/s per °C, so readings drift as the temperature falls — but the
+      baseline should drift *with* them and cancel it. Confirm that, rather than assuming
+      it: a baseline that lags a falling temperature would slowly arm the gate.
+- [ ] **Weather.** Rain, fog, or snow in the beam, if the piece is outdoors. Establish
+      whether precipitation produces phantom triggers; this interacts with the unresolved
+      indoor/outdoor question in `02`.
+- [ ] **Wind-moved objects** near the beam — banners, foliage, cabling.
+
+### D. Boot and recovery
+
+- [ ] **Cold boot with the beam clear.** Baseline seeds on the first reading; confirm it
+      settles to the true background and the gate arms.
+- [ ] **Cold boot with someone standing in the beam.** The baseline seeds to *them*. Verify
+      it self-corrects once they leave and does not sit permanently dead or permanently
+      firing. This is a nightly risk: gates cold-boot unattended ~365 times a year and
+      nobody will be watching.
+- [ ] **Parked-object recovery.** Leave a bag in the beam. Expect one flash, then adoption
+      as background within `stuckResetSec`, then clean re-arming when it is removed.
+
+### E. Harness-specific (this ticket)
+
+- [ ] **Trigger reliability at the real cable length**, at the chosen pulse width. Record
+      the width that worked and the length it was proven at — the bench result does not
+      transfer to an unusually long run.
+- [ ] `LV2` measured at 3.3V maximum with the sensor live, on the finished harness.
+- [ ] **Frame rate unaffected** through the module, on the real run (`BRINGUP.md` §6).
+- [ ] Sensor cable routed away from the LED data line and the 12V run, then re-run
+      scenario A. A width-encoded pulse picking up switching noise produces phantom
+      readings that look exactly like sensor flakiness.
+
+### F. Fleet-level — needs all six gates (ticket `09`)
+
+- [ ] **Cross-talk with all six running.** Six ultrasonic sensors within earshot can hear
+      each other's pings as their own echoes. Cannot be reproduced with one sensor and
+      *will* appear on site. Primes 97/101/103/107/109/113 are the mitigation; verify it.
+- [ ] Confirm each gate flashes on **its own** sensor only.
+
+### G. Experience under real traffic (ticket `10`)
+
+- [ ] **Flow test with a queue or group.** `cooldownSec` is **60** and the flash sequence
+      runs **34.1s**. Under steady footfall most visitors will therefore arrive during a
+      cooldown and never trigger anything — they see someone else's flash, or none. That
+      may be the right call for an accent effect, but it is currently an untested
+      consequence of a number chosen to protect the fade, not to shape the experience.
+- [ ] **Does a passer-by ever see the 15s fade-up?** They trigger the flash and keep
+      walking. Confirm the long recovery reads as intended for the *space* rather than
+      being a tail nobody is present for.
+
 ## Acceptance criteria
 
 - One gate detecting reliably through the module, with `Gate distance` stable in the WLED
