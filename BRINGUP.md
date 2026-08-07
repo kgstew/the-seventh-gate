@@ -28,10 +28,14 @@ Nothing is connected yet. Board unpowered, sensor unconnected.
       silkscreen or your continuity check disagrees, change `hw.led.ins[0].pin` in
       `wled_cfg.json` before uploading — do not renumber the firmware flag.
 - [ ] **Level conversion is fitted and measured.** Echo idles/drives 5V; every GPIO here
-      is 3.3V max. Measure the divided Echo at GPIO 33 with the sensor powered — expect
-      ≈3.0V from the 2.2kΩ/3.3kΩ pair, not 3.3V. See the usermod README for the
-      divider-vs-BSS138 decision.
-- [ ] Divider on perfboard in an enclosure with strain relief. **Not a floating splice** —
+      is 3.3V max. The fleet build is a **BSS138 4-channel shifter at the controller end**
+      — see `.claude/epic/12-echo-level-conversion.md`. Confirm `HV` = 5V, `LV` = 3.3V,
+      both GNDs tied, and **`HV` facing the sensor** — reversed puts 5V on GPIO 33.
+      Measure `LV2` with the sensor powered: must never exceed 3.3V.
+- [ ] **Trigger pulse widened to 20µs** in `sendTrigger()`. The module drives its rising
+      edge through a 10kΩ pull-up, which eats into a 10µs pulse — the HC-SR04's specified
+      minimum. Missing this looks like a dead sensor.
+- [ ] Module on perfboard in an enclosure with strain relief. **Not a floating splice** —
       these face nightly power cycles for a season unattended.
 - [ ] Sensor cable routed **away from the LED data line and the 12V run**, twisted or
       shielded.
@@ -252,31 +256,51 @@ its values retaken and this section supersedes them.
 
 ---
 
-## 6. Sensor chain (ticket 06, never yet run on hardware)
+## 6. Sensor chain (ticket 06)
 
-The usermod compiles and links, but has **never executed on a board**. Everything here
-is a first run.
+**Verified on board 1, 2026-08-06.** Detection is now *passage* based — `deltaCm` closer
+than a self-tracking background — so tune against **Gate trips under**, not raw distance.
 
-- [ ] Sensor powers up from the constant 5V (section 0)
-- [ ] **Info panel shows a plausible distance.** Web UI → Info → *Gate distance*. Wave a
-      hand and watch it track. `off` means the usermod is disabled or pin allocation
-      failed; a permanent `no echo` means wiring, not code
-- [ ] **Frame rate unaffected.** Watch a fast pattern with the sensor running, then set
-      `enabled: false` and compare. Any visible stutter means the non-blocking read is not
-      working as designed — do not accept "looks fine"
-- [ ] Walking toward the gate fires preset 101, the flash runs (~5.1s), and the gate
-      **returns to preset 100**
-- [ ] Retriggering during the 15s cooldown is suppressed; *Flashbulb* readout counts down
-- [ ] `thresholdCm` calibrated by standing where a visitor would, then set comfortably
-      **inside** that reading
+- [x] Sensor powers up from the constant 5V (section 0)
+- [x] **Info panel shows a plausible distance.** Web UI → Info. `off` means the usermod is
+      disabled or pin allocation failed; a permanent `no echo` means wiring, not code
+- [x] **Frame rate unaffected** — 43–45 fps with the sensor pinging every 97ms, identical
+      to idle
+- [x] Passage fires preset 101, the flash runs, and the gate **returns to preset 100**
+- [x] Retriggering during the cooldown is suppressed; *Flashbulb* readout counts down
+- [x] Flash shape verified against WLED's live frame buffer, not by eye
+
+⚠️ **If `Gate trips under` reads `0`, the gate cannot fire at any distance.** The
+background is nearer than `deltaCm`. Re-aim across the opening, or lower `deltaCm`. The
+firmware clamps `deltaCm` to half the background to avoid this, and appends
+`(delta clamped)` when it does — but a background that close means the sensor is not
+pointed where it should be.
+
+Still outstanding:
+
+- [ ] `deltaCm` calibrated at real mounting geometry
 - [ ] **Tested with a real body in winter outerwear.** Clothing absorbs ultrasound and
-      this runs cold at night. A threshold calibrated against a t-shirt will miss coats —
+      this runs cold at night. A `deltaCm` calibrated against a t-shirt will miss coats —
       the single biggest reliability risk in the sensor choice
 - [ ] Multi-hour idle test with zero false triggers
+- [ ] Overnight background stability — confirm temperature drift is absorbed by the
+      baseline rather than accumulating into phantom triggers
 - [ ] Pin changes, if any, followed by a **reboot** — the usermod stages them and does not
       re-init the ISR live
 
 Cross-talk between the six sensors cannot be tested with one gate. That stays in ticket 09.
+
+### Flash sequence as built
+
+Snap white → **15s** fade to black → 2s settled black → **15s** fade up into the pattern
+→ 2s settle → hand back to playlist 100. Total **34.1s**, with `cooldownSec` at **60**.
+
+Two rules hold this together, and both are load-bearing:
+
+- **Every playlist entry's `transition` must be strictly shorter than its `dur`.** An
+  uncommitted fade makes the *next* crossfade blend from a stale state — this produced a
+  phantom second white flash that survived both colour and brightness fixes.
+- **`cooldownSec` must exceed the whole sequence**, or the sensor re-fires mid-fade.
 
 ---
 

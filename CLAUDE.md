@@ -60,24 +60,45 @@ and `09-fleet-commissioning.md`.
 strands permanently:
 
 - `1` Rainbow, `2` Twinkleup — the two patterns
-- `10` Flashbulb White, `11` Flashbulb Black
+- `10` Flashbulb White, `11` Flashbulb Black, `12` Flashbulb Recover
 - `100` Main Pattern playlist — `ps [1,2]`, `repeat: 0` (loops forever), **the boot preset** (`cfg.json` → `def.ps`)
-- `101` Flashbulb Playlist — `ps [10,11]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
+- `101` Flashbulb Playlist — `ps [10,11,12]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
 - The usermod's `flashPresetId` default is **101**. Renumber presets and you must change it too.
 
-`101` ends by *applying* `100`, which **restarts** the main playlist at Rainbow rather
-than resuming. Combined with the 15s cooldown this means Twinkleup may rarely be seen
-under steady traffic — a known interaction, documented in the epic summary, to be
-resolved in ticket 10, not silently "fixed".
+**`12` Flashbulb Recover must stay pixel-identical to `1` Rainbow.** The flash fades *up*
+into `12` from black, so when the playlist hands back to `100` the strip is already
+rendering exactly what `1` renders and the hand-back is visually a no-op. Change Rainbow
+and you must change `12` with it, or a step reappears at the hand-back.
+
+⚠️ **In a WLED playlist, every entry's `transition` must be strictly shorter than its
+`dur`.** This is not a style preference. An entry whose fade is still running when the
+entry ends never *commits*, so the next crossfade blends from the last committed state
+rather than from what is on the pixels. `101` originally had `dur: [1,50]` against
+`transition: [0,50]` — the 5s fade to black ran exactly as long as its 5s entry, so the
+hand-back blended from preset `10`'s **white** and produced a second, phantom flash.
+Diagnosed by capturing WLED's live-preview frame buffer; neither colour nor brightness
+changes touched it. Every entry now carries 2s of settle.
+
+**All presets run at `bri: 255`.** One brightness everywhere means no preset boundary can
+produce a brightness step. `cfg.json` → `def.bri` matches, so boot has no step either.
+
+**The sensor cooldown must exceed the whole flash sequence.** `101` currently runs 34.1s
+(0.1s white + 17s fade down + 17s fade up); `cooldownSec` is **60**. Shorten the cooldown
+below the sequence and the sensor re-fires mid-fade, which visibly corrupts it.
 
 **Segment bounds must be 234 in every preset.** Presets were once exported with
 `seg.stop: 150` and the flashbulb lit only 64% of the gate. There is no ledmap and no
 segment split — patterns address a flat 0–233 index.
 
 **Three values are genuinely per-gate**, everything else clones identically across the
-fleet: hostname, `thresholdCm`, and `readIntervalMs` (primes 97/101/103/107/109/113, to
+fleet: hostname, `deltaCm`, and `readIntervalMs` (primes 97/101/103/107/109/113, to
 desynchronise ultrasonic pings between gates). IP belongs in DHCP reservations on the
 router, not in a cloned `cfg.json`.
+
+**Detection is relative, not absolute — `thresholdCm` no longer exists.** The sensor fires
+on *passage*: something `deltaCm` closer than a self-tracking background estimate, not
+something nearer than a fixed distance. A gate's background is whatever sits across its
+opening, which differs per gate and drifts with temperature. See the usermod README.
 
 **`cfg.json` / `presets.json` are minified single-line device exports.** Edit them
 surgically or regenerate by exporting from a board. Their schemas are not guaranteed
