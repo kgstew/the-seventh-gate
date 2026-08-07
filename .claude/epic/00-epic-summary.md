@@ -93,11 +93,15 @@ LED data **GPIO 2 / 4** · relays **20 / 21 / 22** · external relay trigger **5
 hardware-debounced buttons **34 / 35** (input-only) · I²C Stemma QT **SDA 15 / SCL 14**
 · QEXP **GPIO 0 / 25 / 32 / 33** · PDM mic **7 / 8**. All GPIO inputs **3.3V max**.
 
-Three traps, each documented in the ticket that cares:
+Four traps, each documented in the ticket that cares:
+- **The fused power outputs are relay-gated — `hw.relay.pin` must be `20`.** 12V is not
+  passed straight through to the output terminals; an onboard relay switches each one.
+  At WLED's default of `-1` the gate is dark while the board looks healthy. Found during
+  `11`; consequences (no preset may use `on: false`) in `BRINGUP.md` §3b.
 - **GPIO 0 is the boot strapping pin** — held low at power-on the board enters
   download mode. With nightly cold boots this is a nightly risk, not an edge case.
 - **ESP32's default I²C pins (21/22) are relay control lines here** — never call a
-  bare `Wire.begin()`.
+  bare `Wire.begin()`. They gate the other two power outputs.
 - **GPIO 25 is ADC2**, unreadable while WiFi is active. Use 32/33 for anything analog.
 
 Confirmed: because each gate is one continuous run from the injection point, **no
@@ -117,24 +121,27 @@ Completed tickets move to `complete/`.
 | 03 | `complete/03-pattern-vocabulary.md` — 2 patterns chosen; stock effects sufficient | 01 ✅ | ✅ COMPLETE |
 | 04 | `complete/04-custom-effects.md` — custom WLED effects | 03 ✅ | 🚫 CANCELLED |
 | 05 | `complete/05-pattern-sequencing.md` — presets + playlist for 2-in-series | 03 ✅ | ✅ COMPLETE |
-| 06 | `06-proximity-sensor.md` — HC-SR04 harness + usermod | 01 ✅ | **▶ READY — critical path** |
+| 06 | `06-proximity-sensor.md` — HC-SR04 harness + usermod | 01 ✅ | **▶ IN PROGRESS** — usermod runs on the QuinLED; sensor not yet wired |
 | 07 | `07-flashbulb-effect.md` — preset chain, trigger, cooldown | 05 ✅, 06 | Blocked on 06 |
 | 08 | `08-network-and-ops.md` — router, addressing, OTA, config as code | 01 ✅ | **▶ READY** |
 | 09 | `09-fleet-commissioning.md` — replicate to 6 gates | 05 ✅, 07, 08, 11 | Blocked |
 | 10 | `10-field-tuning-acceptance.md` — on-site tuning and sign-off | 09 | Blocked |
-| 11 | `11-quinled-migration.md` — bench ESP32 → QuinLED Dig-Next-2 | 06 | Blocked on 06 |
+| 11 | `11-quinled-migration.md` — bench ESP32 → QuinLED Dig-Next-2 | — | **▶ IN PROGRESS** — software done, board 1 running |
 
-Critical path: ~~01~~ → ~~03~~ → ~~05~~ → **06** → 07 → **11** → 09 → 10.
+Critical path: ~~01~~ → ~~03~~ → ~~05~~ → **11 + 06 together** → 07 → 09 → 10.
 
-⚠️ **Development is currently on a plain ESP32 dev board, not the QuinLED.** Ticket 01's
-bring-up was completed on that bench hardware, so its checks must be re-run on the target
-board — see `11-quinled-migration.md`. `wled_cfg.json` in this repo is presently a bench
-config, not the fleet baseline.
+**The bench stage is over.** Board 1 (ESP32-PICO-V3-02, MAC `c0:cd:d6:3b:af:b0`) is
+flashed with the fleet binary, provisioned, and running the Main Pattern playlist on the
+real 234-pixel strip. `wled_cfg.json` is the QuinLED fleet baseline; the bench config is
+discarded. Hardware procedure lives in **`BRINGUP.md`** at the repo root.
 
-**Everything now hinges on ticket 06.** It is the only remaining critical-path item and
-the only custom code in the project — the HC-SR04 usermod, which also forces the custom
-WLED build that becomes the fleet baseline. 08 is independent and can run in parallel
-right now; 07 unblocks the moment 06 lands.
+**06 and 11 now close together.** 11 nominally blocked on 06, but the usermod had never
+run on any hardware and the bench board is not going into the installation — verifying it
+there would have been throwaway work. 06's hardware checklist moved into `BRINGUP.md` §6
+and executes on the QuinLED. The usermod is confirmed to build, link, register, and
+allocate GPIO 32/33 on the real board; what remains is a sensor physically wired to it.
+
+08 is independent and can run in parallel right now; 07 unblocks the moment 06 lands.
 
 Half the epic is closed and no pattern work remains. The remaining risk is concentrated
 almost entirely in sensor reliability — see 06's limitations section, and the cross-talk
