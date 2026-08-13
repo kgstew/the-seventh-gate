@@ -9,7 +9,11 @@ Control configuration for **The Seventh Gate** — six independent lighting gate
 patterns cycle in series; one ultrasonic sensor per gate triggers a "flashbulb" on that
 gate only. There is no cross-gate coordination.
 
-The repository is deliberately small because **WLED is the chassis**. Sequencing,
+The repo also covers a second, separate installation on a different control chassis — the
+**Stupa** (authored in Chromatik and driven by an Advatek pixel controller, *not* WLED).
+It shares nothing with the gate fleet but the WS2815 pixel type; see *The Stupa* below.
+
+The repository is deliberately small because **WLED is the chassis** for the gates. Sequencing,
 crossfades, power limiting, OTA, and the web UI are all configuration, not code. The
 repo therefore contains only:
 
@@ -19,6 +23,7 @@ repo therefore contains only:
 | `wled_presets.json` | Patterns, playlists, flashbulb chain — the installation's behaviour |
 | `wled_cfg.json` | Device config: LED bus, network, usermod settings. **Currently a bench export, not the fleet baseline** |
 | `.claude/epic/` | Ticket-per-file decision record; completed tickets move to `complete/` |
+| `stupa/` | The **Stupa** sculpture — Chromatik project (`.lxp`) + fixture (`.lxf`) for its Advatek controller; unrelated to the gate fleet (see *The Stupa*) |
 
 Read `.claude/epic/00-epic-summary.md` first — it holds the architecture decisions,
 hardware pinout, open questions, and the ticket dependency graph. Ticket files are the
@@ -55,24 +60,45 @@ and `09-fleet-commissioning.md`.
 strands permanently:
 
 - `1` Rainbow, `2` Twinkleup — the two patterns
-- `10` Flashbulb White, `11` Flashbulb Black
+- `10` Flashbulb White, `11` Flashbulb Black, `12` Flashbulb Recover
 - `100` Main Pattern playlist — `ps [1,2]`, `repeat: 0` (loops forever), **the boot preset** (`cfg.json` → `def.ps`)
-- `101` Flashbulb Playlist — `ps [10,11]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
+- `101` Flashbulb Playlist — `ps [10,11,12]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
 - The usermod's `flashPresetId` default is **101**. Renumber presets and you must change it too.
 
-`101` ends by *applying* `100`, which **restarts** the main playlist at Rainbow rather
-than resuming. Combined with the 15s cooldown this means Twinkleup may rarely be seen
-under steady traffic — a known interaction, documented in the epic summary, to be
-resolved in ticket 10, not silently "fixed".
+**`12` Flashbulb Recover must stay pixel-identical to `1` Rainbow.** The flash fades *up*
+into `12` from black, so when the playlist hands back to `100` the strip is already
+rendering exactly what `1` renders and the hand-back is visually a no-op. Change Rainbow
+and you must change `12` with it, or a step reappears at the hand-back.
+
+⚠️ **In a WLED playlist, every entry's `transition` must be strictly shorter than its
+`dur`.** This is not a style preference. An entry whose fade is still running when the
+entry ends never *commits*, so the next crossfade blends from the last committed state
+rather than from what is on the pixels. `101` originally had `dur: [1,50]` against
+`transition: [0,50]` — the 5s fade to black ran exactly as long as its 5s entry, so the
+hand-back blended from preset `10`'s **white** and produced a second, phantom flash.
+Diagnosed by capturing WLED's live-preview frame buffer; neither colour nor brightness
+changes touched it. Every entry now carries 2s of settle.
+
+**All presets run at `bri: 255`.** One brightness everywhere means no preset boundary can
+produce a brightness step. `cfg.json` → `def.bri` matches, so boot has no step either.
+
+**The sensor cooldown must exceed the whole flash sequence.** `101` currently runs 34.1s
+(0.1s white + 17s fade down + 17s fade up); `cooldownSec` is **60**. Shorten the cooldown
+below the sequence and the sensor re-fires mid-fade, which visibly corrupts it.
 
 **Segment bounds must be 234 in every preset.** Presets were once exported with
 `seg.stop: 150` and the flashbulb lit only 64% of the gate. There is no ledmap and no
 segment split — patterns address a flat 0–233 index.
 
 **Three values are genuinely per-gate**, everything else clones identically across the
-fleet: hostname, `thresholdCm`, and `readIntervalMs` (primes 97/101/103/107/109/113, to
+fleet: hostname, `deltaCm`, and `readIntervalMs` (primes 97/101/103/107/109/113, to
 desynchronise ultrasonic pings between gates). IP belongs in DHCP reservations on the
 router, not in a cloned `cfg.json`.
+
+**Detection is relative, not absolute — `thresholdCm` no longer exists.** The sensor fires
+on *passage*: something `deltaCm` closer than a self-tracking background estimate, not
+something nearer than a fixed distance. A gate's background is whatever sits across its
+opening, which differs per gate and drifts with temperature. See the usermod README.
 
 **`cfg.json` / `presets.json` are minified single-line device exports.** Edit them
 surgically or regenerate by exporting from a board. Their schemas are not guaranteed
@@ -100,9 +126,12 @@ current presets contain review fixes that **have not been uploaded to any board*
 
 ## Hardware facts that change code decisions
 
-- **Development is on a plain ESP32 dev board, not the QuinLED.** `wled_cfg.json` has
-  the LED bus on GPIO 16; the target is GPIO 2. Migration is ticket 11. Do not treat
-  bench-verified results as valid for the fleet.
+- **Migration to the QuinLED is done (ticket 11).** `wled_cfg.json` is now the QuinLED
+  fleet baseline — LED bus on GPIO 2, usermod block present, relay on GPIO 20 — verified
+  running on board 1 (ESP32-PICO-V3-02, MAC `c0:cd:d6:3b:af:b0`). The bench ESP32 config
+  is gone. Remaining hardware work is in `BRINGUP.md`.
+- **The firmware baseline tag is `v16.0.1`, not `v0.16.1`.** WLED renumbered after
+  `v0.15.5`; no `v0.16.x` tag exists. Docs saying "0.16.1" mean `v16.0.1`.
 - **GPIO 34/35 are never valid for Echo** — hardware debouncing destroys a
   width-encoded pulse, and they are input-only. Trig 32 / Echo 33 via QEXP.
 - **Every GPIO is 3.3V max; Echo outputs 5V** — level conversion is mandatory on both
@@ -112,11 +141,57 @@ current presets contain review fixes that **have not been uploaded to any board*
   sensor look dead.
 - **GPIO 0 is the boot strapping pin**; held low at power-on the board enters download
   mode. Gates cold-boot unattended ~365 times a year, so this is a nightly risk.
+- **The fused power outputs are relay-gated. `hw.relay.pin` must be `20`.** The QuinLED
+  does not pass 12V straight through to its output terminals — an onboard relay switches
+  each one, and GPIO 20 drives the one feeding the LED strip. At WLED's default of `-1`
+  the relay never closes and the gate is dark, while the board itself looks perfectly
+  healthy. Because WLED ties the relay to on/off state, **no preset may use `on: false`**
+  (that opens the relay and cuts strip power); use black at full brightness instead, as
+  preset 11 does. `def.on` must stay `true` for the nightly cold boot.
 - **GPIO 21/22 are relay control lines here**, not I²C. Never call a bare
-  `Wire.begin()` — always `Wire.begin(15, 14)`.
+  `Wire.begin()` — always `Wire.begin(15, 14)`. They gate the other two power outputs and
+  are undriven; WLED's built-in relay supports only one pin, so a second output would
+  require the `multi_relay` usermod and break the one-usermod fleet baseline.
 - Operation is **night-only** with the 12V supply switched externally. Nothing may
   depend on NTP or time of day, and nothing may depend on a network being present —
   running with no reachable AP is the *normal* state.
+
+## The Stupa (Chromatik + Advatek)
+
+A **separate sculpture on a different control chassis** — authored in Chromatik (the LX
+engine) and streamed as **sACN / E1.31** to one **Advatek PixLite A4-S Mk3**. Not part of
+the six-gate WLED fleet and shares no code with it. In normal operation it plays
+**standalone from the controller's microSD** (Advatek SHOWTime); the computer and network
+are present only while programming.
+
+**Structure.** 34 ring arcs = 17 rings × 2 mirrored sides (A/B), ~2,638 WS2815 pixels
+total (~1,319 per side). The pixels are **12V, GRB, data-only** (no clock line).
+
+**Files.** `stupa/Stupa_Show_2026_8out.lxp` is the Chromatik project; its model is 34
+**embedded ArcFixtures** — the geometry lives in the `.lxp`, not in any `.lxf`.
+`stupa/StupaColumnsUpdated.lxf` is a separate *columns* fixture blueprint and is **not
+used** by the current arc-based show.
+
+**Controller (A4-S Mk3, "ASS 1").** Static IP **10.0.0.21 / 255.255.255.0** — it *must* be
+static; on AutoIP it self-assigns a `169.254.x.x` link-local that nothing can reach. Data
+source sACN, "Pixels can be split across universes" **OFF**, RGB(W) Order **GRB**.
+**Expanded Mode is ON**: it repurposes each output's clock pin as a second data line to
+give **8 data-only outputs** (only valid because WS2815 is clockless), capped at **510 px
+/ 3 universes per output**.
+
+**Addressing is a contract — model and controller must agree.** Eight outputs, each one
+contiguous block. Side A = outputs 1-4 (physical terminals 1 & 2), universes **1-9**; Side
+B = outputs 5-8 (terminals 3 & 4), universes **10-18**. Each side splits rings **1-3 / 4-6
+/ 7-9 / 10-17** = **312 / 329 / 299 / 379** px. Two things are baked into the model so the
+controller needs no compensation: color order happens in exactly one place (**model sends
+RGB, controller swaps to GRB**), and the **serpentine wiring is baked into pixel order** by
+reversing every other ring (rings **2, 5, 8, 11, 13, 15, 17** per side) — so controller
+**Zig Zag stays at 1** (its minimum = off) and **Reversed off**.
+
+**Re-address, don't hand-patch.** The `.lxp` addressing and the controller table are a
+matched pair (contiguous, split-OFF, 170 px/universe). If ring counts or the physical
+output split change, regenerate the `.lxp` addressing rather than editing one side alone,
+or the pixel map drifts.
 
 ## Predecessor project
 

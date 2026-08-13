@@ -3,6 +3,38 @@
 **Blocks on:** 01
 **Blocks:** 04 (forces the custom build), 07, 09
 
+## STATUS: working on hardware — detection reworked to passage, not distance
+
+Verified end to end on board 1 (QuinLED, MAC `c0:cd:d6:3b:af:b0`) on 2026-08-06: sensor
+reads, frame rate unaffected (43–45 fps under active pinging), trigger fires preset 101,
+gate returns to 100, cooldown suppresses retriggering.
+
+### CHANGED: detection is relative, `thresholdCm` is gone
+
+The original design fired when something came nearer than a fixed `thresholdCm`. That is
+now **`deltaCm` closer than a self-tracking background estimate**.
+
+Why the change: a gate's quiescent reading is whatever sits across its opening — different
+per gate, and drifting with temperature (~0.6 m/s per °C). A fixed threshold has to be
+hand-calibrated per gate and re-calibrated as the season moves. Detecting change
+calibrates itself, and *passage* is what the piece actually wants.
+
+Consequences, all implemented and documented in the usermod README:
+
+- No-echo counts as "far" rather than being discarded — aimed across an open gate the
+  background *is* no-echo
+- A target that stops moving is adopted as background after `stuckResetSec`, so a bag left
+  in the beam does not flash the gate all night
+- `deltaCm` is clamped to half the background; otherwise a near background puts the trip
+  point at zero and the gate is **silently dead**. Hit this immediately on the bench
+- Info panel gained **Gate background** and **Gate trips under** — with relative
+  detection, a bare distance no longer tells you whether the gate will fire
+
+Per-gate values are now hostname, **`deltaCm`**, and `readIntervalMs`.
+
+The read path stays isolated in `harvestMeasurement()`; all the new logic is
+sensor-agnostic, so the documented VL53L1X fallback is still a one-function swap.
+
 ## DECIDED: HC-SR04 ultrasonic, integrated via usermod
 
 Recorded rationale:

@@ -15,20 +15,9 @@ See `.claude/epic/06-proximity-sensor.md` for the decision record and known limi
 | Echo | QEXP GPIO **33** (white lead) | **5V out — must be level-converted** |
 | GND | QEXP GND | |
 
-### ⚠️ Currently developing on a raw ESP32, not the QuinLED
-
-`wled_cfg.json` has the LED bus on **GPIO 16** because development is happening on a
-plain ESP32 dev board. The pin map above is the **QuinLED target**, not what the bench
-board is running. Migration is tracked in `.claude/epic/11-quinled-migration.md`.
-
-Two things that differ on the bench board and will bite:
-
-- **GPIO 34/35 have no internal pull-up on a raw ESP32.** The QuinLED supplies hardware
-  pull-ups and debouncing on those pins; a bare board does not, so anything wired there
-  floats. The WLED button is set to `-1` (disabled) for exactly this reason.
-- **Echo still needs level conversion on the bench.** A raw ESP32 GPIO is 3.3V max just
-  like the QuinLED — 5V Echo will damage it either way. Fit the divider now, not at
-  migration.
+The bench ESP32 stage is over — `wled_cfg.json` is now the QuinLED baseline (LED bus on
+**GPIO 2**), and the sensor chain is verified directly on the target board. See
+**`BRINGUP.md`** at the repo root for the ordered procedure.
 
 Meter the QEXP pins and the relay-port 5V on the real board before wiring. A wrong Trig
 pin is a silent no-op; a wrong Echo pin fed 5V destroys a GPIO.
@@ -79,10 +68,13 @@ fast edges; the 12V run carries switching current. A width-encoded timing pulse 
 alongside either will pick up noise and produce phantom readings. Use twisted or
 shielded multi-core.
 
-## Build — WLED 0.16.1
+## Build — WLED v16.0.1
 
-Targets **WLED 0.16.1**, the fleet baseline. From 0.15 onward usermods are PlatformIO
-libraries enabled with `custom_usermods`; there is no manual `usermods_list.cpp` editing.
+**The tag is `v16.0.1`, not `v0.16.1`.** WLED renumbered after `v0.15.5`; no `v0.16.x`
+tag exists upstream. Where this repo says "0.16.1" it means `v16.0.1` (`VERSION 2605010`).
+
+From 0.15 onward usermods are PlatformIO libraries enabled with `custom_usermods`; there
+is no manual `usermods_list.cpp` editing.
 
 Files here:
 
@@ -91,44 +83,61 @@ Files here:
 | `usermod_hcsr04_flashbulb.h` | The usermod class |
 | `usermod_hcsr04_flashbulb.cpp` | ISR state, PROGMEM strings, registration |
 | `library.json` | Makes the directory a PlatformIO library |
+| `platformio_override.ini` | The `seventhgate` build env |
 
-The usermod lives in this repo, not the WLED tree, so it stays version-controlled
-alongside the gate config.
+Both the usermod and the build env live in this repo, not the WLED tree, so they stay
+version-controlled alongside the gate config. Symlink rather than copy, so edits here are
+what actually compiles:
 
-1. Clone WLED and check out **v0.16.1**. Record the exact tag — `cfg.json` /
-   `presets.json` are not guaranteed portable across versions.
+```sh
+git clone --depth 1 --branch v16.0.1 https://github.com/wled/WLED.git ~/Code/WLED
 
-2. Make this directory visible to the build. Symlink is preferable to copying, so edits
-   here are what actually gets compiled:
-   ```
-   ln -s /path/to/the-seventh-gate/usermods/hcsr04_flashbulb \
-         /path/to/WLED/usermods/hcsr04_flashbulb
-   ```
-   > Note: `usermods/` at the **repo root** in 0.15+, not `wled00/usermods/`.
+ln -s ~/Code/the-seventh-gate/usermods/hcsr04_flashbulb        ~/Code/WLED/usermods/hcsr04_flashbulb
+ln -s ~/Code/the-seventh-gate/usermods/hcsr04_flashbulb/platformio_override.ini \
+      ~/Code/WLED/platformio_override.ini
 
-3. Add a build env in `platformio_override.ini`:
-   ```ini
-   [env:seventhgate]
-   extends = env:esp32dev
-   custom_usermods = hcsr04_flashbulb
-   ```
+cd ~/Code/WLED && pio run -e seventhgate
+```
 
-4. Build, flash **one** board, verify against the checklist below, and only then
-   produce the fleet binary.
+> `usermods/` is at the WLED **repo root** in 0.15+, not `wled00/usermods/`.
 
-## Two lines to verify against your tree
+Output: `build_output/release/WLED_16.0.1_SEVENTHGATE.bin`. Flashing and first-boot
+provisioning are in **`BRINGUP.md`** at the repo root.
 
-Written against the 0.16 API, but these are the spots most likely to differ between
-point releases. Cross-check against a stock usermod — `usermods/PIR_sensor_switch/` is
-a good reference.
+The env extends `esp32dev_8M` — the QuinLED carries an ESP32-PICO-V3-02 with 8MB flash.
+`custom_usermods` **replaces** the base env's value rather than appending, so the fleet
+binary contains this usermod and nothing else. That is deliberate twice over: it is the
+fleet-baseline rule from the epic summary, and it drops AudioReactive's stale claim on
+GPIO 32, which is Trig here.
 
-| Line | If it fails |
+## Version-sensitive lines — verified against v16.0.1
+
+All three spots flagged in the source are correct as written on this baseline. Re-check
+on any version bump; `usermods/PIR_sensor_switch/` is the reference to compare against.
+
+| Line | Status on v16.0.1 |
 |---|---|
-| `REGISTER_USERMOD(hcsr04_flashbulb);` in the `.cpp` | Copy whatever registration pattern the stock usermod uses |
-| `createNestedObject` / `createNestedArray` | ArduinoJson 6 form; still compiles under AJ7 with deprecation warnings. AJ7 native: `root["u"].to<JsonObject>()` and `user["Name"].to<JsonArray>()` |
+| `REGISTER_USERMOD(hcsr04_flashbulb);` | ✅ Matches `PIR_sensor_switch` exactly |
+| `PinManager::allocatePin(gpio, output, tag)` | ✅ `PinManager` is a **namespace** in 16.x rather than a class with static methods — the call form is unchanged either way. On 0.14.x and earlier it was the instance form `pinManager.allocatePin(...)` |
+| `createNestedObject` / `createNestedArray` | ✅ ArduinoJson **6.18.1** — native, no deprecation. If a future bump moves to AJ7: `root["u"].to<JsonObject>()` and `user["Name"].to<JsonArray>()` |
 
-`PinManager::allocatePin(...)` is already the 0.15+ static form. On 0.14.x and earlier it
-was the instance form `pinManager.allocatePin(...)`.
+Verified in the ELF rather than inferred from a clean compile: `um_hcsr04_flashbulb` is
+present in WLED's usermod registry array, and `hcsr04EchoISR()` resolves to `0x40080edc`
+— inside IRAM, so `IRAM_ATTR` took effect.
+
+## Confirmed running on hardware
+
+First execution on a real board, 2026-08-06 (MAC `c0:cd:d6:3b:af:b0`):
+
+- Usermod ID **900** appears in `/json/info` → `um`
+- Info panel reports `Gate distance: no echo` and `Flashbulb: armed`
+- **`no echo` rather than `off` is the meaningful result** — `off` is what prints when
+  `enabled` is false *or* `pinsOk` is false, so this proves `PinManager` granted GPIO
+  32/33 and `attachInterrupt` was installed. With no sensor wired, no echo is correct.
+- Config round-trips: the board's `um.HCSR04Flashbulb` block matches this repo's
+  `wled_cfg.json` exactly, so `addToConfig`/`readFromConfig` both work.
+
+Still unrun: everything needing a sensor physically attached — see `BRINGUP.md` section 6.
 
 ## Configuration
 
@@ -139,17 +148,46 @@ tunable from a phone with no reflash.
 |---|---|---|
 | `enabled` | `true` | |
 | `trigPin` / `echoPin` | 32 / 33 | **Reboot required to change** |
-| `thresholdCm` | 150 | Fire when closer than this. Calibrate per gate. |
+| `deltaCm` | 40 | **How much closer than the background counts as a passage.** Calibrate per gate. |
 | `minValidCm` | 5 | Below this, discard as a bad reading |
-| `maxValidCm` | 400 | Above this, treat as no target. Also sets the echo timeout. |
-| `consecutiveHits` | 2 | Readings under threshold before firing |
-| `cooldownSec` | 15 | Suppression window after a trigger |
+| `maxValidCm` | 400 | Above this, nothing is out there. Also sets the echo timeout. |
+| `consecutiveHits` | 2 | Readings showing a target before firing |
+| `cooldownSec` | 60 | Suppression window. **Must exceed the whole flash sequence** (34.1s) |
 | `readIntervalMs` | 100 | **Vary per gate — see cross-talk** |
+| `baselineAdaptSec` | 8 | How fast the background estimate tracks a changing scene |
+| `stuckResetSec` | 60 | Adopt a parked object as background after this long |
 | `flashPresetId` | **101** | "Flashbulb Playlist" — matches `wled_presets.json` |
 
 `consecutiveHits` matters more than it looks. HC-SR04 readings are noisy, and a single
 spurious short reading should not fire a flash across a whole gate. Raise it if you see
 phantom triggers; lower it to 1 only if detection feels sluggish.
+
+`cooldownSec` is not just taste. The flash sequence runs 34.1s end to end; a cooldown
+shorter than that lets the sensor re-fire mid-fade, which visibly corrupts it.
+
+## How detection works — change, not distance
+
+The trigger is **"something got `deltaCm` closer than the running background"**, not
+"something is nearer than X centimetres".
+
+A gate's quiescent reading is whatever sits across its opening. That differs at every
+gate, and it drifts: the speed of sound moves ~0.6 m/s per °C, so a fixed threshold
+calibrated in the afternoon is wrong at 3am. Detecting a *change* calibrates itself, and
+passage is what the installation actually wants to detect.
+
+Three behaviours that follow, each of which exists for a reason:
+
+- **A no-echo reading counts as "far", it is not discarded.** Aimed across an open gate
+  the background *is* no-echo, and a passer-by is the first valid reading the sensor ever
+  returns. Throwing those away would leave nothing to detect a change against.
+- **A target that stops moving becomes the new background** after `stuckResetSec`. A bag
+  left in the beam would otherwise flash the gate every cooldown until someone moved it —
+  which would make change detection strictly worse than a fixed threshold for a piece
+  left unattended overnight.
+- **`deltaCm` is clamped to half the background.** If the background is nearer than
+  `deltaCm`, the trip point would be at or below zero and the gate could never fire at
+  any distance — dead, silently. The info panel appends `(delta clamped)` when this is in
+  effect. At real gate geometry the clamp never engages.
 
 ## Cross-talk between gates — set `readIntervalMs` per gate
 
@@ -164,22 +202,50 @@ rather than locking together. Primes work well:
 | `readIntervalMs` | 97 | 101 | 103 | 107 | 109 | 113 |
 
 This is one of the three genuinely per-gate values in `cfg.json`, alongside hostname and
-`thresholdCm`.
+`deltaCm`.
 
 ## Field tuning
 
-1. Open the gate's web UI → **Info**. Two live readouts: **Gate distance** and
-   **Flashbulb** (armed / cooldown / disabled).
-2. Stand where a visitor would. Read the distance. Set `thresholdCm` comfortably inside
-   it — generous margin, not the edge.
-3. **Test with people in winter outerwear.** Clothing absorbs ultrasound and this piece
-   runs at night in the cold. A threshold calibrated against a t-shirt will miss people
+The info panel carries four live readouts, and they are load-bearing — relative detection
+means a bare distance no longer tells you whether the gate is about to fire:
+
+| Readout | Meaning |
+|---|---|
+| **Gate distance** | Last valid reading, or `no echo` |
+| **Gate background** | The self-tracking quiescent estimate |
+| **Gate trips under** | The distance that will actually fire. **This is the number to tune against.** |
+| **Flashbulb** | `armed` / `Ns cooldown` / `disabled` |
+
+1. Aim the sensor across the opening and let it sit for ~10s so the background settles.
+2. Read **Gate trips under**. If it says **0**, the gate cannot fire — the background is
+   nearer than `deltaCm`. Re-aim, or lower `deltaCm`.
+3. Stand where a visitor would and confirm the reading drops below the trip distance.
+   Leave generous margin, not the edge.
+4. **Test with people in winter outerwear.** Clothing absorbs ultrasound and this piece
+   runs at night in the cold. A `deltaCm` calibrated against a t-shirt will miss people
    in coats. This is the biggest reliability risk in the sensor choice.
-4. Leave margin for temperature drift — the speed of sound moves ~0.6 m/s per °C, so
-   readings shift across seasons.
 5. Watch for phantom triggers with all six gates live; adjust intervals or
    `consecutiveHits`.
 6. Re-export `cfg.json` and commit it.
+
+Temperature drift needs less margin than it used to: both the reading and the background
+shift together, so relative detection cancels most of it.
+
+## Diagnosing the rendered output
+
+`/json/state` reports *target* values, not what is on the pixels mid-transition, which
+makes it useless for chasing visual artifacts. WLED's live-preview WebSocket is ground
+truth — it pushes the actual frame buffer every 40ms:
+
+```
+connect ws://<gate>/ws, send {"lv":true}
+binary frames: 'L', version byte, then RGB per LED
+```
+
+Two caveats learned the hard way: the buffer is **pre-global-brightness** (white reads
+255 regardless of `bri`), and the board cannot serve the WebSocket and a tight HTTP poll
+at the same time without dropping requests. This is how the double-flash was tracked to
+an uncommitted transition after colour and brightness theories both failed.
 
 ## Design notes
 
@@ -197,16 +263,23 @@ code. Everything downstream — streak, cooldown, config, info panel — is sens
 so the documented VL53L1X fallback replaces one function rather than the usermod. If
 cross-talk or coat absorption proves fatal in the field, that swap stays cheap.
 
-## Not yet verified on hardware
+## Hardware verification
 
-Written but not yet run. Outstanding:
+Verified on board 1 (MAC `c0:cd:d6:3b:af:b0`), 2026-08-06:
 
-- [ ] Compiles against the chosen WLED baseline (check the version-dependent lines)
-- [ ] Constant-5V pin identified with a meter; sensor powers up
-- [ ] Distance readings sane and stable in the info panel
-- [ ] **Frame rate unaffected** — no stutter while reads are running
-- [ ] Trigger fires the flashbulb preset; gate returns to its playlist
-- [ ] Cooldown suppresses retriggering
+- [x] Compiles against the chosen WLED baseline — v16.0.1, links and registers, see above
+- [x] Constant-5V pin identified; sensor powers up
+- [x] Distance readings sane and stable in the info panel
+- [x] **Frame rate unaffected** — held 43–45 fps with the sensor pinging every 97ms,
+      identical to idle. The non-blocking read design does what it claims.
+- [x] Trigger fires the flashbulb preset; gate returns to its playlist
+- [x] Cooldown suppresses retriggering
+- [x] Passage detection confirmed by hand through the beam
+
+Still outstanding, all needing time or the full fleet:
+
 - [ ] No false triggers over a multi-hour idle test
 - [ ] Detection reliable with real bodies in outerwear
-- [ ] Cross-talk tested with all six gates running
+- [ ] Cross-talk tested with all six gates running (ticket 09)
+- [ ] Background stability overnight — confirm temperature drift is absorbed by the
+      baseline rather than accumulating into phantom triggers

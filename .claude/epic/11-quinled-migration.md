@@ -1,7 +1,100 @@
 # 11 — Migrate from Bench ESP32 to QuinLED Dig-Next-2
 
-**Blocks on:** 06 (usermod working on the bench)
+**Blocks on:** ~~06 (usermod working on the bench)~~ — see *Bench stage skipped* below
 **Blocks:** 09 — the fleet cannot be commissioned on bench hardware
+
+## Status — software done, hardware pending
+
+QuinLED boards are on hand (1–2 of 6) along with a real 234-pixel WS2815 run. The
+software half of this ticket is complete; the hardware half is the runbook in
+**`BRINGUP.md`** at the repo root.
+
+Done:
+
+- [x] WLED checked out and the fleet binary **builds** — `WLED_16.0.1_SEVENTHGATE.bin`
+- [x] Usermod verified to compile, link, and register (see *Build resolved* below)
+- [x] `wled_cfg.json` promoted to the QuinLED baseline; bench config discarded
+- [x] Build env version-controlled at `usermods/hcsr04_flashbulb/platformio_override.ini`
+
+- [x] Board 1 flashed, provisioned, running the Main Pattern playlist on the real
+      234-pixel strip. Patterns confirmed correct by eye.
+- [x] **Power fault found and fixed** — the fused outputs are relay-gated, see below
+
+Pending, all requiring the physical board: `BRINGUP.md` sections 4 (measurements, soak,
+cold-boot cycling), 6 (the whole sensor chain — nothing is wired yet) and 7.
+
+### ⚠️ The fused power outputs are relay-gated — GPIO 20
+
+The largest finding of the migration, and one that would have shipped six dark gates.
+
+The QuinLED's fused power outputs are **not** straight passthrough. Each is switched by an
+onboard relay; the one feeding the LED output is driven by **GPIO 20**. `hw.relay.pin` was
+`-1` (WLED's default, inherited from the bench config), so the relay never closed and the
+strip received nothing despite the board being fully alive.
+
+What made it hard to read: 12V present at the input, fuse intact, ground continuous, and
+**2.6V on the output terminal** instead of 0V — the data line back-feeding the strip
+through the WS2815 ICs' ESD diodes. The board looked half-powered and the fault presented
+as a supply or wiring problem.
+
+Fix, now in the repo baseline: `"relay": {"pin": 20, "rev": false, "odrain": false}`.
+
+Second-order consequences, recorded in `BRINGUP.md` section 3b:
+
+- WLED's relay follows on/off state, so **any preset with `on: false` physically cuts
+  strip power**. All six presets are `on: true` today — preset 11 "Flashbulb Black" is
+  black *colour* at full brightness, not off. That is now a constraint, not a
+  coincidence.
+- `def.on` must stay `true` for the nightly unattended cold boot.
+- Outputs 2 and 3 sit on GPIO 21/22 and stay undriven. WLED's built-in relay handles one
+  pin only, so using a second power output would need the `multi_relay` usermod — which
+  breaks the one-usermod fleet-baseline rule. Relevant if anyone later wants to split the
+  234-pixel run across outputs.
+
+The repo already warned that GPIO 21/22 are relay control lines rather than I²C. What was
+missing is that **GPIO 20 gates the LED power output**, and the fleet cannot function
+without it configured.
+
+### Bench stage skipped — 06 is now verified here, not before
+
+This ticket nominally blocked on 06 ("usermod working on the bench"). The usermod was
+written but **never run on any hardware**, and the bench ESP32 is not going into the
+installation. Verifying the sensor chain on hardware that will be thrown away is wasted
+work, so 06's hardware checklist moved into `BRINGUP.md` section 6 and is executed on the
+QuinLED. 06 and 11 now close together.
+
+The bench ESP32's only remaining value was proving the usermod compiles, and that is now
+proven directly against the fleet binary.
+
+### Build resolved
+
+**The version tag in every doc was wrong.** The repo pinned "WLED 0.16.1"; there is no
+`v0.16.x` tag upstream. WLED renumbered after `v0.15.5`, so the baseline is **`v16.0.1`**
+(`VERSION 2605010`). Same release, different scheme. Docs corrected.
+
+API compatibility against `v16.0.1`, checked rather than assumed — all three
+version-sensitive lines flagged in the source are correct as written:
+
+| Line | Result |
+|---|---|
+| `REGISTER_USERMOD(hcsr04_flashbulb);` | Matches `PIR_sensor_switch` exactly |
+| `PinManager::allocatePin(gpio, output, tag)` | `PinManager` is a **namespace** in 16.x; the call form is unchanged |
+| `createNestedObject` / `createNestedArray` | ArduinoJson **6.18.1** — native, not deprecated |
+
+Link verified in the ELF, not inferred from a successful compile:
+
+- `um_hcsr04_flashbulb` present in WLED's usermod registry array
+- `hcsr04EchoISR()` at `0x40080edc` — **inside IRAM**, so `IRAM_ATTR` took effect
+- `Gate distance` / `Flashbulb` info-panel strings present in the binary
+- `audioreactive` **excluded** — `custom_usermods` in the override replaces the base
+  env's value rather than appending, so the fleet binary carries this usermod and
+  nothing else. This also removes AudioReactive's claim on GPIO 32, which is Trig here.
+
+Base env is `esp32dev_8M` (8MB flash, `large_partitions`). Flash 60.2%, RAM 24.7%.
+
+⚠️ **First flash must be `esptool.py erase_flash`.** WLED's platformio.ini warns that an
+existing ESP32 install cannot be updated to an IDF-V4 build and that OTA to it misbehaves.
+QuinLED boards ship with WLED preinstalled, so this applies out of the box.
 
 ## Why this exists
 
@@ -72,15 +165,30 @@ Then re-verify the sensor chain from `06`:
 - [ ] Trigger fires preset 101; gate returns to preset 100
 - [ ] Cooldown suppresses retriggering
 
-## Config management
+## Config management — RESOLVED
 
-Right now `wled_cfg.json` is a **bench** config sitting where `08`/`09` expect fleet
-config. Resolve at migration:
+`wled_cfg.json` **is now the QuinLED fleet baseline**, promoted in place. The bench
+variant was discarded rather than kept under `config/bench/`: the bench board is not
+going into the installation, and a second config file that boots a gate with its LED
+data on the wrong pin is a trap, not an asset.
 
-- [ ] Promote the QuinLED config to the repo baseline once verified
-- [ ] Decide whether to keep a bench variant (e.g. `config/bench/`) or discard it
-- [ ] `presets.json` should carry over unchanged — it holds no pin or board state.
-      Confirm rather than assume.
+Changes made:
+
+| Field | Was | Now | Why |
+|---|---|---|---|
+| `hw.led.ins[0].pin` | `[16]` | `[2]` | bench ESP32 → QuinLED output 1 |
+| `id.mdns` / `id.name` | `wled-e8a2ac` / `WLED` | `gate-1` / `Gate 1` | per-gate |
+| `um.HCSR04Flashbulb` | *absent* | full block, `readIntervalMs: 97` | the bench export had no usermod block at all — proof the usermod had never run on that board |
+| `um.AudioReactive` | present, disabled | **removed** | not compiled into the fleet binary, and its stale `digitalmic.pin` claimed **GPIO 32** — which is Trig |
+| `vid` | `2606300` | `2605010` | the bench export was from a build **newer** than v16.0.1. A cfg claiming a newer version than the running firmware makes WLED skip its config migrations |
+
+- [x] `presets.json` carries over unchanged — confirmed, not assumed. All four patterns
+      are `seg 0–234`, `def.ps` is `100`, and the `101 → end: 100` hand-back is intact.
+      No pin or board state anywhere in the file.
+
+Still open: `hw.led.ins[0].ledma` is `30`, a **5V-per-LED** figure, and WLED's ABL maths is
+5V-based. It does not describe a 12V WS2815 pixel. Harmless while `maxpwr: 0`, wrong the
+moment ABL is switched on. See `BRINGUP.md` section 5.
 
 ## Acceptance criteria
 
@@ -93,6 +201,12 @@ config. Resolve at migration:
 
 ## Open questions
 
-- How many QuinLED boards are on hand? Migration needs at least one before `09`.
-- Is the real 234-pixel WS2815 run available for testing, or only a short test strip?
-- Were ticket 02's measurements taken on real hardware?
+- ~~How many QuinLED boards are on hand?~~ **1–2 of 6.** Enough for this ticket; `09`
+  stays blocked on the remaining boards arriving.
+- ~~Is the real 234-pixel WS2815 run available for testing?~~ **Yes** — the full run and
+  a 12V PSU are on the bench, so section 4's voltage-drop, uniformity, and draw
+  measurements can all be taken for real.
+- Were ticket 02's measurements taken on real hardware? — still open, resolved by
+  `BRINGUP.md` section 5.
+- Is the LED data terminal actually GPIO 2? Taken from QuinLED's pinout guide, not from
+  the board in hand. `BRINGUP.md` section 0 confirms it before anything is powered.
