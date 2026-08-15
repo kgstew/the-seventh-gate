@@ -152,7 +152,7 @@ tunable from a phone with no reflash.
 | `minValidCm` | 5 | Below this, discard as a bad reading |
 | `maxValidCm` | 400 | Above this, nothing is out there. Also sets the echo timeout. |
 | `consecutiveHits` | 2 | Readings showing a target before firing |
-| `cooldownSec` | 60 | Suppression window. **Must exceed the whole flash sequence** (34.1s) |
+| `cooldownSec` | 60 | Suppression window. **Must exceed the whole flash sequence** (35.1s) |
 | `readIntervalMs` | 100 | **Vary per gate — see cross-talk** |
 | `baselineAdaptSec` | 8 | How fast the background estimate tracks a changing scene |
 | `stuckResetSec` | 60 | Adopt a parked object as background after this long |
@@ -162,7 +162,7 @@ tunable from a phone with no reflash.
 spurious short reading should not fire a flash across a whole gate. Raise it if you see
 phantom triggers; lower it to 1 only if detection feels sluggish.
 
-`cooldownSec` is not just taste. The flash sequence runs 34.1s end to end; a cooldown
+`cooldownSec` is not just taste. The flash sequence runs 35.1s end to end; a cooldown
 shorter than that lets the sensor re-fire mid-fade, which visibly corrupts it.
 
 ## How detection works — change, not distance

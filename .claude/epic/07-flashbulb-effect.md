@@ -1,11 +1,82 @@
 # 07 — Flashbulb Effect
 
-## STATUS: working on hardware, with a subtle bug found and fixed
+## STATUS: working on hardware; decay reshaped to a sparkle, **not yet on a board**
 
-Verified on board 1 on 2026-08-06. Current shape, measured off WLED's live frame buffer
+Verified on board 1 on 2026-08-06. The shape measured then off WLED's live frame buffer
 rather than inferred: snap to white → **15s** fade to black → 2s settled black → **15s**
-fade up into the pattern → 2s settle → hand back. Total **34.1s**; `cooldownSec` is 60 so
-the sensor cannot re-fire mid-sequence.
+fade up into the pattern → 2s settle → hand back. Total **34.1s**.
+
+### 2026-08-15 — the decay is now a sparkle, not a fade. Verified on board 1.
+
+Stakeholder call: the flash should stay a hard white snap, but instead of dimming evenly
+to black it should *break up* — noise rising over the decay as a sparkle that fizzes out.
+Shape as built and measured:
+
+| Entry | Preset | `dur` | `transition` | What it does |
+|---|---|---|---|---|
+| 1 | `10` Flashbulb White | 0.1s | 0s | the snap, unchanged |
+| 2 | `13` Flashbulb Sparkle | 7s | 5s | white dissolves into full-density sparkle |
+| 3 | `11` Flashbulb Black | 11s | 9s | the whole field fizzles out to black |
+| 4 | `12` Flashbulb Recover | 17s | 15s | fade up into the pattern, unchanged |
+
+Total **35.1s** against `cooldownSec` 60 — ~25s of margin. Flash to settled black is 18.1s
+against the 17s of the fade it replaces, so the pacing of the piece is essentially
+unchanged.
+
+**Why this needs no new effect.** WLED renders *both* the outgoing and incoming effect
+during a transition and blends the two frames (`Segment::_t->_oldSegment` in `FX_fcn.cpp`),
+so crossfading a solid preset into an effect preset dissolves the solid surface into that
+effect. The rising noise is that blend, not an animation anyone had to write.
+
+`13` is **Twinkleup (`fx: 106`)**, the same effect as pattern `2`, at `ix: 255` / `sx: 200`.
+Two details from `FX.cpp` matter:
+
+- `ix` is a threshold on a *fixed* per-pixel random value (`if (prng.random8() >
+  SEGMENT.intensity) pixBri = 0`). At 255 no pixel is masked, so all 234 twinkle on
+  independent sine phases — which is what gives the field its density.
+- With `pal: 0`, `color_from_palette()` returns `col[0]` directly instead of a palette
+  entry (`FX_fcn.cpp:1169`). That is what keeps the sparkle **white**. Setting a palette
+  on `13` would turn the afterglow into colour.
+
+### The stage that had to be deleted — parameter-only transitions do not blend
+
+The first build had a third stage between them: `14` Flashbulb Fizzle, Twinkleup at
+`ix: 96` / `sx: 230`, to thin the field before it went out. The reasoning was that `ix`
+masks on a fixed per-pixel value, so lowering it removes pixels from the *same* set and
+the thinning would read as dying rather than churning. That part was right. The transition
+was not. Captured off the live-preview buffer:
+
+| t (s) | mean | stdev | lit | |
+|---|---|---|---|---|
+| 6.5 | 131 | 90 | 89% | full sparkle |
+| 7.5 | 46 | 82 | 32% | **popped** — one frame, no 4s crossfade |
+| 14.5 | 88 | 50 | **100%** | **bloomed** — brighter than the sparkle it replaced |
+| 17.0 | 2 | 1 | 10% | black, eventually |
+
+Two distinct failures, one cause. **WLED starts a blend when `fx`, colour, or palette
+change — not when `ix`/`sx` change**, which apply instantly. So `13` → `14` was a hard cut.
+Then `14` → `11` *did* blend (`fx 106` → `fx 0`), but blended down from a full-density
+render rather than from the sparse one actually on the pixels: all 234 pixels relit and
+mean rose 46 → 88 before decaying. A second bloom, three-quarters of the way through the
+decay — precisely the artifact class of the phantom flash above, found the same way.
+
+`14` is deleted. `13` now fades straight to black over 9s. Re-measured: stdev falls
+**84 → 0** in a linear ramp, `peak` decays monotonically **255 → 8**, black at t+16.0s,
+and the strip settles at 195.5 mean / 33.5 stdev from t+33.0s — bit-for-bit the pre-flash
+pattern, so the hand-back stays a visual no-op.
+
+**Rule, now in CLAUDE.md: a flashbulb stage that wants to differ from its neighbour must
+differ in `fx`, not just in slider values.**
+
+Verified on board 1 (2026-08-15), presets uploaded and read back byte-identical:
+
+- [x] The rise reads as the flash breaking up — stdev 10 → 90 as mean falls 241 → 129
+- [x] The fizzle is monotone and reaches genuine black before `12` starts its fade up
+- [x] Hand-back to `100` is a no-op
+- [ ] Peak draw unchanged — the sparkle is strictly dimmer than the white snap, so ticket
+      02's PSU sizing should hold, but confirm nothing new is ABL-clamped (`maxpwr` is 0
+      today, so nothing is clamping at all yet)
+- [ ] Seen by eye, at night, on a real gate rather than in the frame buffer (ticket 10)
 
 ### The phantom second flash — root cause
 

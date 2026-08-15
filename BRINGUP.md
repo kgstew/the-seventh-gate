@@ -159,7 +159,7 @@ What the baseline `wled_cfg.json` now carries:
 | `def.ps` | `100` | boot into the Main Pattern playlist |
 | `hw.led.maxpwr` | `0` | ABL off — see section 5 |
 
-- [ ] Presets 1, 2, 10, 11, 100, 101 all present in the UI
+- [ ] Presets 1, 2, 10, 11, 12, 13, 100, 101 all present in the UI
 - [ ] **Usermod settings visible** under Config → Usermods with the values above.
       If the section is missing, the usermod did not register — stop and check the build.
 - [ ] Boots into preset 100 after the reboot
@@ -189,7 +189,7 @@ Consequences that follow from this, all load-bearing:
 
 - **WLED's relay tracks on/off state.** Whenever WLED is "off", the relay physically opens
   and the strip loses power. Any preset with `on: false`, an off command, or the nightlight
-  timer expiring will cut power and click the relay. All six presets are currently
+  timer expiring will cut power and click the relay. All seven presets are currently
   `on: true` — including preset 11 "Flashbulb Black", which is black *colour* at full
   brightness rather than off. **Keep it that way**: an `on: false` there would open the
   relay on every visitor trigger.
@@ -292,8 +292,28 @@ Cross-talk between the six sensors cannot be tested with one gate. That stays in
 
 ### Flash sequence as built
 
-Snap white → **15s** fade to black → 2s settled black → **15s** fade up into the pattern
-→ 2s settle → hand back to playlist 100. Total **34.1s**, with `cooldownSec` at **60**.
+Snap white → **5s** dissolve into a full-density sparkle → 2s settle → **9s** fizzle to
+black → 2s settled black → **15s** fade up into the pattern → 2s settle → hand back to
+playlist 100. Total **35.1s**, with `cooldownSec` at **60**.
+
+The decay is entirely crossfades between full-brightness presets — WLED blends the old
+and new effect's rendered frames during a transition, so fading a solid white preset into
+an effect preset breaks the white apart into that effect rather than dimming it.
+
+Measured on board 1 (2026-08-15) off the live-preview WebSocket, sampling mean brightness
+and spatial stdev across all 234 pixels:
+
+| t (s) | mean | stdev | |
+|---|---|---|---|
+| 0.0 | 232 | 10 | snap to white, 94% of pixels at full |
+| 2.5 | 194 | 46 | noise climbing out of the white |
+| 5.0–7.0 | ~130 | ~89 | full sparkle, 2s plateau |
+| 13.0 | 96 | 30 | fizzling |
+| 16.0 | 1 | 0 | black |
+| 33.0+ | 195.5 | 33.5 | recovered — **identical** to the pre-flash pattern |
+
+`peak` decays monotonically 255 → 8 through the fizzle. Any bump there is a bug, not
+taste — see the parameter-only-transition warning in `CLAUDE.md`.
 
 Two rules hold this together, and both are load-bearing:
 
