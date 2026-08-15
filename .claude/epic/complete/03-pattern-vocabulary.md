@@ -15,13 +15,22 @@ Note this does *not* remove the custom WLED build — ticket `06`'s HC-SR04 user
 requires compiling WLED. The fleet firmware remains a custom binary; it simply contains
 the usermod and no custom effects.
 
-| Preset | Name | Stock effect | Segment | Brightness |
-|---|---|---|---|---|
-| 1 | Rainbow | fx 9 | 0–234 | 128 |
-| 2 | Twinkleup | fx 106, speed 23 | 0–234 | 255 |
+| Preset | Name | Stock effect | Colour | Segment | Brightness |
+|---|---|---|---|---|---|
+| 1 | Rainbow | fx 9 | palette | 0–234 | 128 |
+| 2 | Twinkleup | fx 106, speed 23 | **red** `col[0] = 255,0,0` | 0–234 | 255 |
 
 Authoritative copy lives in the committed `wled_presets.json`; the table is for human
 reference.
+
+**2026-08-15 — Twinkleup recoloured white → red** (stakeholder call). With `pal: 0` the
+effect takes `col[0]` directly rather than a palette entry, so the colour of the twinkles
+*is* `col[0]`; nothing else about the preset changed. Verified on board 1 off the
+live-preview buffer: 100% of lit pixels are pure `(r,0,0)`, brightest `(255,0,0)`.
+
+⚠️ Preset `13` Flashbulb Sparkle is the **same effect** (fx 106) and is deliberately
+**still white** — it is the afterglow of a camera flash, not a pattern. These two are not
+a matched pair the way `1` and `12` are; do not "sync" them.
 
 Note the two presets capture **different brightness** (128 vs 255). This ticket
 recommended inheriting global brightness so a single slider dims the whole gate; as

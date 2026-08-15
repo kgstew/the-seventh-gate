@@ -48,6 +48,11 @@ pio run -e seventhgate -t upload                     # run from the WLED tree
 
 Config deploys as file uploads to a board's web UI (`/edit` filesystem interface or the
 JSON API) — `presets.json` first, `cfg.json` last, since it may force a reconnect.
+⚠️ **`cfg.json` carries `nw.ins[0].ssid` and overwrites it.** The passphrase is preserved
+(WLED only applies `psk` when present, and the export omits it), but the SSID is not — so
+uploading the baseline to a board provisioned onto a different network sends it to
+`WLED-AP`, where it looks dead from the LAN while running perfectly. Check that field
+against the board's actual network before every `cfg.json` push.
 Boards are reached at `gate-1.local` … `gate-6.local`, or `4.3.2.1` via AP fallback.
 Ticket 09 calls for a fleet push script; it does not exist yet.
 
@@ -59,10 +64,10 @@ and `09-fleet-commissioning.md`.
 **Preset numbering is a contract across three files.** Break it and a triggered gate
 strands permanently:
 
-- `1` Rainbow, `2` Twinkleup — the two patterns
-- `10` Flashbulb White, `11` Flashbulb Black, `12` Flashbulb Recover
+- `1` Rainbow, `2` Twinkleup (**red**) — the two patterns
+- `10` Flashbulb White, `11` Flashbulb Black, `12` Flashbulb Recover, `13` Flashbulb Sparkle
 - `100` Main Pattern playlist — `ps [1,2]`, `repeat: 0` (loops forever), **the boot preset** (`cfg.json` → `def.ps`)
-- `101` Flashbulb Playlist — `ps [10,11,12]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
+- `101` Flashbulb Playlist — `ps [10,13,11,12]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
 - The usermod's `flashPresetId` default is **101**. Renumber presets and you must change it too.
 
 **`12` Flashbulb Recover must stay pixel-identical to `1` Rainbow.** The flash fades *up*
@@ -79,12 +84,35 @@ hand-back blended from preset `10`'s **white** and produced a second, phantom fl
 Diagnosed by capturing WLED's live-preview frame buffer; neither colour nor brightness
 changes touched it. Every entry now carries 2s of settle.
 
+**The flash decays through sparkle, and the decay is made of crossfades, not brightness.**
+WLED renders *both* effects during a transition and blends the two frames, so a crossfade
+from a solid preset into an effect preset dissolves the solid surface into that effect.
+The flash therefore goes white → `13` (Twinkleup, `ix: 255` — every pixel twinkling) →
+`11` black: noise rises out of the white over 5s, then the whole field fizzles down over
+9s. Measured off the live-preview buffer, spatial stdev across the strip climbs 10 → 90
+on the way in and falls linearly 84 → 0 on the way out. `13` must keep `pal: 0`; with
+palette 0 the effect takes `col[0]` directly, which is what makes the sparkle white
+rather than palette-coloured. `13` shares its effect with pattern `2` but **not** its
+colour — `2` is red, `13` is white, deliberately. They are not a matched pair the way
+`1` and `12` are, so recolouring one must not drag the other with it.
+
+⚠️ **A playlist entry that changes only effect *parameters* does not crossfade.** WLED
+starts a blend when `fx`, colour, or palette changes — not when `ix`/`sx` change, which
+apply instantly. The decay originally had a second sparkle stage `14` at `ix: 96` to thin
+the field before black; on hardware it **popped** (mean 131 → 46 in one frame) and, worse,
+the following fade to black blended from a *full-density* render, so all 234 pixels
+relit and mean rose 46 → 88 before decaying — a visible second bloom, the same class of
+artifact as the phantom flash below. Any future stage that wants to differ from its
+neighbour must differ in **`fx`**, not just in slider values.
+
 **All presets run at `bri: 255`.** One brightness everywhere means no preset boundary can
 produce a brightness step. `cfg.json` → `def.bri` matches, so boot has no step either.
+This is also why the decay is built from crossfades between full-brightness presets.
 
-**The sensor cooldown must exceed the whole flash sequence.** `101` currently runs 34.1s
-(0.1s white + 17s fade down + 17s fade up); `cooldownSec` is **60**. Shorten the cooldown
-below the sequence and the sensor re-fires mid-fade, which visibly corrupts it.
+**The sensor cooldown must exceed the whole flash sequence.** `101` currently runs 35.1s
+(0.1s white + 16s sparkle decay to black + 2s black + 17s fade up); `cooldownSec` is **300**.
+Shorten the cooldown below the sequence and the sensor re-fires mid-fade, which visibly
+corrupts it.
 
 **Segment bounds must be 234 in every preset.** Presets were once exported with
 `seg.stop: 150` and the flashbulb lit only 64% of the gate. There is no ledmap and no
