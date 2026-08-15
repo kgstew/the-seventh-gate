@@ -203,7 +203,7 @@ acceptance, it is marked.
 
 ### G. Experience under real traffic (ticket `10`)
 
-- [ ] **Flow test with a queue or group.** `cooldownSec` is **60** and the flash sequence
+- [ ] **Flow test with a queue or group.** `cooldownSec` is **300** and the flash sequence
       runs **35.1s**. Under steady footfall most visitors will therefore arrive during a
       cooldown and never trigger anything — they see someone else's flash, or none. That
       may be the right call for an accent effect, but it is currently an untested

@@ -116,7 +116,11 @@ onto the network. Credentials have to be entered once, by hand, per board.
 
 After an `erase_flash` the board comes up on its own AP:
 
-- SSID **`WLED-AP`**, password **`wled1234`** (`DEFAULT_AP_PASS`)
+- SSID **`WLED-AP`**, password **`wled1234`** (`DEFAULT_AP_PASS`) — ⚠️ **board 1's AP
+  password is no longer the default.** Its `ap.pskl` reads **11**, not 8, so `wled1234`
+  is rejected; the password set on it is `seventhgate`. `cfg.json` cannot tell you a
+  password, only its length, so `ap.pskl` is the only clue a board has been changed —
+  check it before concluding an AP is unreachable.
 - Web UI at **`http://4.3.2.1`** → Config → WiFi Setup
 - Enter SSID + passphrase, set **mDNS address `gate-1`**, Save & Reboot
 
@@ -126,14 +130,63 @@ Then:
 - [ ] Note the DHCP lease and add a **router reservation** — IP belongs in DHCP, not in a
       cloned `cfg.json`
 
-Once the board is on the network the credentials survive a `cfg.json` upload, so this
-step is only needed on a first flash or after an erase.
+The *passphrase* survives a `cfg.json` upload — WLED only overwrites it when a `psk` key
+is actually present, and the export never contains one (`cfg.cpp:107`, "this will keep old
+password intact if not present in JSON").
+
+⚠️ **The SSID does not.** `nw.ins[0].ssid` is a plain string in the export and it *is*
+applied. Uploading the baseline to a board provisioned onto some other network repoints it
+at whatever SSID the file names, the retained passphrase no longer matches, and the board
+drops to `WLED-AP` on the next boot — looking, from the LAN, exactly like a dead board.
+**Check `nw.ins[0].ssid` in `wled_cfg.json` against the network the board is actually on
+before every `cfg.json` upload.** Hit on 2026-08-15: the baseline still named a stale SSID
+and knocked a working board off the network. Recovery does not need the passphrase, only
+the right SSID — see section 2b.
+
+---
+
+## 2b. Recovering a board that fell back to AP
+
+A board in AP mode is usually *healthy* — check before assuming a fault. Over USB:
+
+```sh
+# WLED parses a leading '{' on the serial port straight into deserializeState
+python3 -c "import serial,time; s=serial.Serial('/dev/cu.usbserial-110',115200,timeout=.25); \
+time.sleep(3); s.write(b'{\"v\":true}\n'); time.sleep(2); print(s.read(8000).decode('utf8','replace'))"
+```
+
+`info.wifi.ap: true` with `info.ip: ""` means it is running fine and simply never joined —
+patterns, usermod and relay are all working.
+
+**Re-provision over USB with Improv Serial.** WLED's serial port reaches `deserializeState`
+only — state, not config — so the SSID cannot be fixed the same way. But the firmware has
+Improv Serial compiled in (`wled00/improv.cpp`), and that *does* write WiFi credentials and
+persist them (`parseWiFiCommand()` ends in `serializeConfigToFS()`). This is the fastest
+recovery and needs no AP:
+
+```
+'IMPROV' | 0x01 version | 0x03 RPC | L | 0x01 wifi | rpcData | checksum
+  rpcData  = [len, ssidLen, ssid…, passLen, pass…]   len = 2 + ssidLen + passLen
+  packetLen = 9 + L,  checksum = sum(bytes[0:packetLen]) & 0xFF
+```
+
+Write it to `/dev/cu.usbserial-110` at 115200 after ~6s of boot settling (opening the port
+resets the ESP32) and watch for the state responses: `0x03` provisioning → `0x04`
+provisioned. The board then rejoins and is back at `gate-1.local`. Used on 2026-08-15 to
+recover board 1 in one shot.
+
+Do **not** reach for a filesystem image to fix config over USB. `platformio.ini` never sets
+`board_build.filesystem`, so `pio run -t uploadfs` builds a **SPIFFS** image while WLED
+expects **LittleFS** (`wled.h:245`) — the board finds an unreadable filesystem, reformats,
+and comes up at factory defaults, losing `presets.json`, `cfg.json` and the stored
+passphrase to change one string.
 
 ---
 
 ## 3. Upload config
 
-**`presets.json` first, `cfg.json` last** — `cfg.json` may force a reconnect.
+**`presets.json` first, `cfg.json` last** — `cfg.json` may force a reconnect, and it
+**overwrites the SSID** (section 2). Confirm `nw.ins[0].ssid` matches reality first.
 
 ```sh
 cd ~/Code/the-seventh-gate
@@ -152,7 +205,7 @@ What the baseline `wled_cfg.json` now carries:
 | `id.mdns` / `id.name` | `gate-1` / `Gate 1` | per-gate |
 | `hw.led.ins[0].pin` | `[2]` | was `[16]` on the bench ESP32 |
 | `hw.led.ins[0].len` | `234`, type 22, order 0 (GRB) | flat 0–233, no ledmap |
-| `um.HCSR04Flashbulb` | trig 32 / echo 33, threshold 150, cooldown 15s, preset 101 | new — the bench export had no usermod block |
+| `um.HCSR04Flashbulb` | trig 32 / echo 33, delta 40cm, cooldown 300s, idle self-fire 1200s, preset 101 | new — the bench export had no usermod block |
 | `um.AudioReactive` | **removed** | not in the fleet binary, and its stale config claimed GPIO 32 (= Trig) |
 | `hw.relay.pin` | `20` | was `-1` — **without this the strip gets no power at all**, see 3b |
 | `vid` | `2605010` | was `2606300`, newer than v16.0.1 — a cfg claiming a newer version makes WLED skip its migrations |
@@ -294,7 +347,7 @@ Cross-talk between the six sensors cannot be tested with one gate. That stays in
 
 Snap white → **5s** dissolve into a full-density sparkle → 2s settle → **9s** fizzle to
 black → 2s settled black → **15s** fade up into the pattern → 2s settle → hand back to
-playlist 100. Total **35.1s**, with `cooldownSec` at **60**.
+playlist 100. Total **35.1s**, with `cooldownSec` at **300** (5 min).
 
 The decay is entirely crossfades between full-brightness presets — WLED blends the old
 and new effect's rendered frames during a transition, so fading a solid white preset into

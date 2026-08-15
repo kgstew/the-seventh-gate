@@ -174,7 +174,7 @@ interrupt kept landing on the same entry — not a restart.
 
 The Twinkleup-starvation risk is also largely dissolved by two later changes: detection is
 now *passage*-based, so triggers are discrete events rather than a metronome, and
-`cooldownSec` is **60** against a 35.1s flash sequence. Re-assess under real traffic in
+`cooldownSec` is **300** against a 35.1s flash sequence. Re-assess under real traffic in
 `10` rather than from a spreadsheet, but the original mechanism was misdiagnosed.
 
 ## Open questions

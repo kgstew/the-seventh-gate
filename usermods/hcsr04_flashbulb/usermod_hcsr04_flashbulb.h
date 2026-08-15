@@ -5,7 +5,9 @@
 // HC-SR04 passage detector for the flashbulb effect.  Targets WLED v16.0.1.
 //
 // One sensor per gate.  On detection it applies the flashbulb playlist preset,
-// then enforces a cooldown before it can fire again.
+// then enforces a cooldown before it can fire again.  If nothing trips it for
+// idleFireSec it fires anyway, so a gate on a quiet path still shows the effect
+// the piece is built around rather than running its patterns all night.
 //
 // DETECTION IS RELATIVE, NOT ABSOLUTE.  The trigger is "something got
 // deltaCm closer than the running background", not "something is nearer than
@@ -66,11 +68,13 @@ class HCSR04FlashbulbUsermod : public Usermod
     uint16_t minValidCm      = 5;    // below this, treat as a bad reading
     uint16_t maxValidCm      = 400;  // above this, nothing is out there
     uint8_t  consecutiveHits = 2;    // readings showing a target before firing
-    uint16_t cooldownSec     = 15;   // suppression window after a trigger
+    uint16_t cooldownSec     = 300;  // suppression window after a trigger (5 min)
     uint16_t readIntervalMs  = 100;  // vary per gate -- see cross-talk note
     uint16_t baselineAdaptSec = 8;   // how fast the background estimate tracks
     uint16_t stuckResetSec   = 60;   // adopt a parked object as background after this
     uint8_t  flashPresetId   = 101;  // "Flashbulb Playlist" in wled_presets.json
+    uint16_t idleFireSec     = 1200; // flash anyway after this long unflashed (0 = off)
+    uint16_t idleFireSpreadSec = 60; // random spread on that, so the fleet desynchronises
 
     // ---- runtime ----
     bool          initDone        = false;
@@ -90,6 +94,7 @@ class HCSR04FlashbulbUsermod : public Usermod
     uint16_t      lastBaselineCm  = 0;
     uint16_t      lastEffDeltaCm  = 0;   // deltaCm after the close-background clamp
     unsigned long targetSince     = 0;   // when the current target first appeared
+    unsigned long idleWindowMs    = 0;   // idleFireSec plus this cycle's random spread
 
     static const char _name[];
     static const char _enabled[];
@@ -212,6 +217,30 @@ class HCSR04FlashbulbUsermod : public Usermod
       }
     }
 
+    // Both the sensor and the idle timer fire through here, so the cooldown
+    // and the idle countdown can never disagree about when the last flash was.
+    void fireFlash(unsigned long now)
+    {
+      applyPreset(flashPresetId);
+      lastFireTime = now;
+      haveFired    = true;
+      scheduleIdleFire();
+    }
+
+    // Re-roll the idle window on every flash.  A fixed interval would have all
+    // six gates self-firing on the same second: they are switched on together
+    // at dusk, and before the crowd arrives none of them has been triggered, so
+    // their countdowns would start and stay in lockstep.  Six gates flashing in
+    // unison reads as coordination, and this installation deliberately has
+    // none.  Re-rolling means they scatter instead, and keep scattering.
+    void scheduleIdleFire()
+    {
+      idleWindowMs = (unsigned long)idleFireSec * 1000UL;
+      if (idleFireSpreadSec) {
+        idleWindowMs += hw_random((uint32_t)idleFireSpreadSec * 1000UL);
+      }
+    }
+
     // Convert a completed echo pulse to centimetres.  Isolated so a
     // VL53L1X swap replaces only the read path.
     void harvestMeasurement()
@@ -230,6 +259,7 @@ class HCSR04FlashbulbUsermod : public Usermod
     void setup() override
     {
       if (enabled) startSensor();
+      scheduleIdleFire();   // lastFireTime is 0, so the first window runs from boot
       initDone = true;
     }
 
@@ -254,16 +284,26 @@ class HCSR04FlashbulbUsermod : public Usermod
       }
 
       // 3. Fire, if the streak is satisfied and we are out of cooldown.
+      bool cooled = !haveFired
+                  || (now - lastFireTime >= (unsigned long)cooldownSec * 1000UL);
+
       if (hitStreak >= consecutiveHits) {
-        bool cooled = !haveFired
-                    || (now - lastFireTime >= (unsigned long)cooldownSec * 1000UL);
         if (cooled) {
-          applyPreset(flashPresetId);
-          lastFireTime = now;
-          haveFired    = true;
+          fireFlash(now);
           DEBUG_PRINTF("[HCSR04] triggered at %ucm\n", lastDistanceCm);
         }
         hitStreak = 0;
+      }
+      // 3b. Nothing has passed for a long time -- flash anyway.  A gate on a
+      //     quiet path would otherwise just run its patterns all night and
+      //     never show a visitor the effect the piece is built around.  The
+      //     window is measured from the last flash of EITHER kind, so this is
+      //     "the gate flashes at least this often", not "the sensor is idle":
+      //     keying it to the sensor alone would re-fire every loop once the
+      //     window passed, since a self-trigger is not a sensor trigger.
+      else if (idleFireSec && cooled && now - lastFireTime >= idleWindowMs) {
+        fireFlash(now);
+        DEBUG_PRINTLN(F("[HCSR04] idle self-trigger"));
       }
 
       // 4. Send the next trigger pulse.
@@ -337,6 +377,20 @@ class HCSR04FlashbulbUsermod : public Usermod
         state.add(F("armed"));
         state.add("");
       }
+
+      // Kept as its own row rather than folded into "Flashbulb": the armed /
+      // cooldown string is what the commissioning checklists read.
+      JsonArray idle = user.createNestedArray(F("Flashbulb auto"));
+      if (!enabled || !pinsOk || !idleFireSec) {
+        idle.add(F("off"));
+        idle.add("");
+      } else if (since >= idleWindowMs) {
+        idle.add(F("due"));
+        idle.add("");
+      } else {
+        idle.add((uint16_t)((idleWindowMs - since) / 60000UL));
+        idle.add(F(" min to auto-flash"));
+      }
     }
 
     void addToConfig(JsonObject& root) override
@@ -354,6 +408,8 @@ class HCSR04FlashbulbUsermod : public Usermod
       top["baselineAdaptSec"] = baselineAdaptSec;
       top["stuckResetSec"]    = stuckResetSec;
       top["flashPresetId"]    = flashPresetId;
+      top["idleFireSec"]      = idleFireSec;
+      top["idleFireSpreadSec"] = idleFireSpreadSec;
     }
 
     bool readFromConfig(JsonObject& root) override
@@ -373,16 +429,24 @@ class HCSR04FlashbulbUsermod : public Usermod
       ok &= getJsonValue(top["minValidCm"],       minValidCm,       5);
       ok &= getJsonValue(top["maxValidCm"],       maxValidCm,       400);
       ok &= getJsonValue(top["consecutiveHits"],  consecutiveHits,  2);
-      ok &= getJsonValue(top["cooldownSec"],      cooldownSec,      15);
+      ok &= getJsonValue(top["cooldownSec"],      cooldownSec,      300);
       ok &= getJsonValue(top["readIntervalMs"],   readIntervalMs,   100);
       ok &= getJsonValue(top["baselineAdaptSec"], baselineAdaptSec, 8);
       ok &= getJsonValue(top["stuckResetSec"],    stuckResetSec,    60);
       ok &= getJsonValue(top["flashPresetId"],    flashPresetId,    101);
+      ok &= getJsonValue(top["idleFireSec"],      idleFireSec,      1200);
+      ok &= getJsonValue(top["idleFireSpreadSec"], idleFireSpreadSec, 60);
 
       if (consecutiveHits < 1)  consecutiveHits  = 1;
       if (readIntervalMs < 40)  readIntervalMs   = 40;  // keep clear of echo timeout
       if (baselineAdaptSec < 1) baselineAdaptSec = 1;
       if (deltaCm < 1)          deltaCm          = 1;   // 0 would latch permanently on
+
+      // An idle window inside the cooldown would mean the gate wants to
+      // self-fire while it is still suppressed -- it would simply never happen,
+      // silently.  Push it out instead of leaving a dead setting in the UI.
+      if (idleFireSec && idleFireSec < cooldownSec) idleFireSec = cooldownSec;
+      scheduleIdleFire();   // re-roll now, so an edit takes effect immediately
 
       // Re-seed the background when the tuning that defines it changes, so
       // an on-site edit takes effect on the next reading instead of bleeding

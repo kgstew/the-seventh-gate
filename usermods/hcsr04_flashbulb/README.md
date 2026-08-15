@@ -152,18 +152,47 @@ tunable from a phone with no reflash.
 | `minValidCm` | 5 | Below this, discard as a bad reading |
 | `maxValidCm` | 400 | Above this, nothing is out there. Also sets the echo timeout. |
 | `consecutiveHits` | 2 | Readings showing a target before firing |
-| `cooldownSec` | 60 | Suppression window. **Must exceed the whole flash sequence** (35.1s) |
+| `cooldownSec` | **300** | Suppression window, 5 min. **Must exceed the whole flash sequence** (35.1s) |
 | `readIntervalMs` | 100 | **Vary per gate — see cross-talk** |
 | `baselineAdaptSec` | 8 | How fast the background estimate tracks a changing scene |
 | `stuckResetSec` | 60 | Adopt a parked object as background after this long |
 | `flashPresetId` | **101** | "Flashbulb Playlist" — matches `wled_presets.json` |
+| `idleFireSec` | **1200** | Flash anyway after 20 min without one. `0` disables |
+| `idleFireSpreadSec` | 60 | Random spread on that window — **do not set to 0 across the fleet** |
 
 `consecutiveHits` matters more than it looks. HC-SR04 readings are noisy, and a single
 spurious short reading should not fire a flash across a whole gate. Raise it if you see
 phantom triggers; lower it to 1 only if detection feels sluggish.
 
 `cooldownSec` is not just taste. The flash sequence runs 35.1s end to end; a cooldown
-shorter than that lets the sensor re-fire mid-fade, which visibly corrupts it.
+shorter than that lets the sensor re-fire mid-fade, which visibly corrupts it. At 300s a
+gate flashes at most once every five minutes, so a queue of visitors sees one flash
+between them rather than one each — deliberate, and worth re-checking under real footfall
+in ticket `10`.
+
+### The idle self-trigger
+
+`idleFireSec` fires the flashbulb with no sensor involvement at all. A gate on a quiet
+path would otherwise run its patterns all night and never show the effect the piece is
+built around; this guarantees one at least every 20 minutes.
+
+Two things about it are load-bearing:
+
+- **The window is measured from the last flash of either kind, not from the last sensor
+  trigger.** Keying it to the sensor would re-fire every loop once the window passed,
+  because a self-trigger is not a sensor trigger and would never reset it. So read it as
+  "this gate flashes at least this often", and note a busy gate never self-fires at all.
+- **`idleFireSpreadSec` exists to keep the fleet from synchronising.** All six gates come
+  up together at dusk and, before the crowd arrives, none of them has been triggered — so
+  a fixed interval would have all six self-firing on the same second, every 20 minutes,
+  for as long as the site stays quiet. Six gates flashing in unison reads as coordination,
+  and this installation deliberately has none. The window is re-rolled after every flash,
+  so they scatter and keep scattering. Setting it to 0 across the fleet re-creates exactly
+  the failure it prevents.
+
+The window is clamped up to `cooldownSec` if set below it, since a self-fire inside the
+cooldown would be suppressed and simply never happen. *Flashbulb auto* in the info panel
+counts it down; it reads `off` when disabled and `due` while a fire is pending.
 
 ## How detection works — change, not distance
 

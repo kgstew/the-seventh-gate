@@ -48,6 +48,11 @@ pio run -e seventhgate -t upload                     # run from the WLED tree
 
 Config deploys as file uploads to a board's web UI (`/edit` filesystem interface or the
 JSON API) — `presets.json` first, `cfg.json` last, since it may force a reconnect.
+⚠️ **`cfg.json` carries `nw.ins[0].ssid` and overwrites it.** The passphrase is preserved
+(WLED only applies `psk` when present, and the export omits it), but the SSID is not — so
+uploading the baseline to a board provisioned onto a different network sends it to
+`WLED-AP`, where it looks dead from the LAN while running perfectly. Check that field
+against the board's actual network before every `cfg.json` push.
 Boards are reached at `gate-1.local` … `gate-6.local`, or `4.3.2.1` via AP fallback.
 Ticket 09 calls for a fleet push script; it does not exist yet.
 
@@ -59,7 +64,7 @@ and `09-fleet-commissioning.md`.
 **Preset numbering is a contract across three files.** Break it and a triggered gate
 strands permanently:
 
-- `1` Rainbow, `2` Twinkleup — the two patterns
+- `1` Rainbow, `2` Twinkleup (**red**) — the two patterns
 - `10` Flashbulb White, `11` Flashbulb Black, `12` Flashbulb Recover, `13` Flashbulb Sparkle
 - `100` Main Pattern playlist — `ps [1,2]`, `repeat: 0` (loops forever), **the boot preset** (`cfg.json` → `def.ps`)
 - `101` Flashbulb Playlist — `ps [10,13,11,12]`, `repeat: 1`, **`end: 100`** — the hand-back to the main playlist
@@ -87,7 +92,9 @@ The flash therefore goes white → `13` (Twinkleup, `ix: 255` — every pixel tw
 9s. Measured off the live-preview buffer, spatial stdev across the strip climbs 10 → 90
 on the way in and falls linearly 84 → 0 on the way out. `13` must keep `pal: 0`; with
 palette 0 the effect takes `col[0]` directly, which is what makes the sparkle white
-rather than palette-coloured.
+rather than palette-coloured. `13` shares its effect with pattern `2` but **not** its
+colour — `2` is red, `13` is white, deliberately. They are not a matched pair the way
+`1` and `12` are, so recolouring one must not drag the other with it.
 
 ⚠️ **A playlist entry that changes only effect *parameters* does not crossfade.** WLED
 starts a blend when `fx`, colour, or palette changes — not when `ix`/`sx` change, which
@@ -103,7 +110,7 @@ produce a brightness step. `cfg.json` → `def.bri` matches, so boot has no step
 This is also why the decay is built from crossfades between full-brightness presets.
 
 **The sensor cooldown must exceed the whole flash sequence.** `101` currently runs 35.1s
-(0.1s white + 16s sparkle decay to black + 2s black + 17s fade up); `cooldownSec` is **60**.
+(0.1s white + 16s sparkle decay to black + 2s black + 17s fade up); `cooldownSec` is **300**.
 Shorten the cooldown below the sequence and the sensor re-fires mid-fade, which visibly
 corrupts it.
 
